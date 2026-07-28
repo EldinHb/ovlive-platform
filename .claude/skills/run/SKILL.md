@@ -34,7 +34,7 @@ parentheses, so `source .env` breaks the shell. Pass env explicitly:
 cargo build -p ovlive-server
 DATABASE_URL=postgres://ovlive:ovlive@localhost:5434/ovlive \
 BIND_ADDR=0.0.0.0:8080 DATA_DIR=./data RUST_LOG=info,ovlive=debug \
-GTFS_USER_AGENT='OVLive/0.1 (+contact: change-me@example.com)' \
+GTFS_USER_AGENT='OVLive/0.1 (+contact: you@example.com)' \
 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=admin \
 ./target/debug/ovlive-server > /tmp/ovlive-server.log 2>&1 &
 ```

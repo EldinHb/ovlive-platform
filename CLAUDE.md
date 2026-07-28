@@ -68,8 +68,10 @@ cargo run --release --example validate_feed -p ovlive-gtfs   # ~8 s on the real 
 
 The feeds are free, best-effort, community-run. Being a bad citizen gets the project blocked.
 
-- **Identifying User-Agent.** `GTFS_USER_AGENT` must name the app *and* a contact address.
-  Never ship the `change-me@example.com` placeholder anywhere real.
+- **Identifying User-Agent.** `GTFS_USER_AGENT` must name the app *and* a contact address the
+  operators can actually reach. The real one is `OVLive/0.1 (+contact: you@example.com)`, which is
+  also the built-in default (`crates/server/src/config.rs`, `GtfsConfig::default`) — never
+  replace it with an unreachable or placeholder address.
 - **Conditional requests only.** GTFS fetches send `If-None-Match` / `If-Modified-Since` from
   the persisted `FeedMeta` (`data/gtfs_meta.bin`); `304` means do nothing. One check per day at
   `GTFS_REFRESH_HOUR` local (`GTFS_REFRESH_TZ`).

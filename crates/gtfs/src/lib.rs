@@ -34,7 +34,7 @@ impl Default for GtfsConfig {
     fn default() -> Self {
         Self {
             url: "https://gtfs.ovapi.nl/gtfs-nl.zip".into(),
-            user_agent: "OVLive/0.1 (+contact: change-me@example.com)".into(),
+            user_agent: "OVLive/0.1 (+contact: you@example.com)".into(),
             refresh_hour: 3,
             timezone: chrono_tz::Europe::Amsterdam,
         }

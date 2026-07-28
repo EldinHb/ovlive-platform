@@ -64,7 +64,7 @@ impl Config {
             data_dir: env_or("DATA_DIR", "./data"),
 
             gtfs_url: env_or("GTFS_URL", "https://gtfs.ovapi.nl/gtfs-nl.zip"),
-            gtfs_user_agent: env_or("GTFS_USER_AGENT", "OVLive/0.1 (+contact: change-me@example.com)"),
+            gtfs_user_agent: env_or("GTFS_USER_AGENT", "OVLive/0.1 (+contact: you@example.com)"),
             gtfs_refresh_hour: env_parse("GTFS_REFRESH_HOUR", 3),
             gtfs_tz: env_or("GTFS_REFRESH_TZ", "Europe/Amsterdam")
                 .parse()
