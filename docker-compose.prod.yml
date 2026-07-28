@@ -1,0 +1,121 @@
+# Production stack: pulls published images, builds nothing.
+#
+#   IMAGE_PREFIX=ghcr.io/my-org IMAGE_TAG=latest docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Every secret comes from the host environment — nothing sensitive is defaulted here, and the
+# `:?` forms make a missing one fail at `up` instead of booting something half-configured.
+# See .env.prod.example for the full list.
+#
+# Nothing is published to the host: Cloudflare Tunnel reaches the containers over this compose
+# network, so the only ingress is Cloudflare's.
+
+name: ovlive
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ovlive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in the host environment}
+      POSTGRES_DB: ${POSTGRES_DB:-ovlive}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ovlive} -d ${POSTGRES_DB:-ovlive}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  server:
+    # ovlive-platform-api, not ovlive-server: the service and the crate keep the old name, only
+    # the published image differs. ovlive-server, ovlive-web *and* ovlive-api are all already
+    # taken in the owner's ghcr namespace by the pre-Rust projects.
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX must be set, e.g. ghcr.io/my-org}/ovlive-platform-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # Fair use: exactly one ZMQ SUB connection per NDOV datastream, per process. This service
+    # holds all three (KV6, KV78Turbo, NS InfoPlus), so it must never be scaled past 1 replica
+    # — two containers means two subscriptions and risks the project being blocked upstream.
+    deploy:
+      replicas: 1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-ovlive}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ovlive}
+      DATA_DIR: /data
+      RUST_LOG: ${RUST_LOG:-info,ovlive=info}
+
+      # --- GTFS static (STRICT policy — see CLAUDE.md) ---
+      GTFS_URL: https://gtfs.ovapi.nl/gtfs-nl.zip
+      # Must name the app *and* a contact address the operators can actually reach. Required
+      # rather than defaulted: `:?` rejects an empty value too, and an empty GTFS_USER_AGENT
+      # would override the binary's built-in default with no identification at all — the one
+      # failure mode the policy exists to prevent.
+      GTFS_USER_AGENT: ${GTFS_USER_AGENT:?GTFS_USER_AGENT must be set, and must be a reachable contact — see the data-source policy in CLAUDE.md}
+      GTFS_REFRESH_TZ: Europe/Amsterdam
+      GTFS_REFRESH_HOUR: "3"
+
+      # --- Realtime feeds ---
+      ZMQ_KV6_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7658
+      ZMQ_KV78_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7817
+      ZMQ_KV78_TOPICS: /GOVI/KV8passtimes/
+      ZMQ_NS_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7664
+      ZMQ_IDLE_TIMEOUT_SECS: "60"
+
+      WS_TICK_HZ: ${WS_TICK_HZ:-3}
+      PUBLIC_RATE_PER_MIN: ${PUBLIC_RATE_PER_MIN:-6000}
+
+      # Seeded only on the first boot, while the users table is empty.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL must be set in the host environment}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in the host environment}
+    volumes:
+      # Not a cache you can throw away. It holds the ~232 MiB gtfs-nl.zip and the snapshots the
+      # server boots from; losing it forces a fresh download of the feed on next start, which
+      # the data-source policy exists to avoid.
+      - ovlive-data:/data
+    # No healthcheck: the runtime image is distroless, so there is no shell, curl or wget to
+    # run one with. Liveness is observable from outside via the web container's /health proxy.
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  web:
+    image: ${IMAGE_PREFIX}/ovlive-platform-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      # Empty = same origin: nginx proxies /v1, /health and /docs to the server itself, so the
+      # whole app lives behind one Cloudflare hostname with no CORS and no cross-origin WS.
+      # Set it only if you publish the API on a separate hostname.
+      API_BASE: ${API_BASE:-}
+      API_UPSTREAM: server:8080
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *logging
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # A token-based (remotely-managed) tunnel: the public hostname and its routing live in the
+    # Cloudflare Zero Trust dashboard, not in this repo. Point the tunnel's public hostname at
+    # the service http://web:80 — that one route covers the SPA, the REST API, /docs and the
+    # WebSocket. Turn on "WebSocket" support for the tunnel; /v1/stream needs it.
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in the host environment}
+    depends_on:
+      - web
+    logging: *logging
+
+volumes:
+  pgdata:
+  ovlive-data:

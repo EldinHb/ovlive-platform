@@ -1,9 +1,14 @@
+# Shared by Dockerfile (server) and Dockerfile.web — both build from the repo root, so
+# apps/ and packages/ must stay in the context even though the server doesn't use them.
 target/
 data/
-node_modules/
-apps/
-packages/api-types/node_modules/
+**/node_modules/
+.pnpm-store/
+apps/web/build/
+apps/web/.react-router/
 .git/
+.github/
 .env
+.env.*
 *.md
 !README.md

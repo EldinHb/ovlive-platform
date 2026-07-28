@@ -1,0 +1,39 @@
+# --- Build stage: pnpm workspace build of the SPA ---
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+# corepack pins pnpm from the root package.json's `packageManager` field. The prompt has to
+# be off: corepack asks before downloading a pinned pnpm, and there is no TTY to answer it.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+
+# Manifests + lockfile first, so the install layer caches independently of source edits.
+# .npmrc matters: node-linker=hoisted is what the build expects.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/web/package.json apps/web/
+COPY packages/api-types/package.json packages/api-types/
+RUN pnpm install --frozen-lockfile
+
+# Sources. packages/ is needed whole, not just api-types: proto.ts raw-imports
+# packages/proto/ovlive.proto and parses it at runtime, so the .proto is part of the bundle.
+COPY apps/web apps/web
+COPY packages packages
+
+# VITE_API_BASE is deliberately NOT baked in — see docker/web/10-ovlive-config.sh. SSR is off
+# (react-router.config.ts), so this emits a static client bundle under build/client.
+RUN pnpm --filter @ovlive/web run build
+
+# --- Runtime: nginx serving the static bundle and proxying the API ---
+FROM nginx:1.27-alpine AS runtime
+
+COPY --from=builder /app/apps/web/build/client /usr/share/nginx/html
+COPY docker/web/nginx.conf.template /etc/nginx/ovlive.conf.template
+COPY docker/web/10-ovlive-config.sh /docker-entrypoint.d/10-ovlive-config.sh
+RUN chmod +x /docker-entrypoint.d/10-ovlive-config.sh
+
+# API_BASE empty = same origin (this nginx proxies /v1 itself). API_UPSTREAM is where it
+# proxies to; both are read at container start, never at build time.
+ENV API_BASE="" \
+    API_UPSTREAM="server:8080"
+
+EXPOSE 80
