@@ -11,6 +11,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <title>OVLive — Realtime NL transit</title>
         <Meta />
         <Links />
+        {/* Deployment config, rewritten by the container entrypoint. Must be a plain
+            blocking script in <head> so window.__OVLIVE_CONFIG__ exists before the bundle
+            evaluates app/lib/config.ts. */}
+        <script src="/config.js" />
       </head>
       <body>
         {children}

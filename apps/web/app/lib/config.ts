@@ -1,5 +1,28 @@
-export const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) || "http://127.0.0.1:8080";
+declare global {
+  interface Window {
+    __OVLIVE_CONFIG__?: { apiBase?: string };
+  }
+}
+
+/**
+ * Where the backend lives. Resolved at *runtime* from `/config.js`, which the container
+ * entrypoint rewrites on every start — Vite would otherwise inline `VITE_API_BASE` into the
+ * bundle, so one published image could only ever serve one deployment.
+ *
+ * An empty `apiBase` means "same origin": the production nginx proxies `/v1` to the server
+ * itself, so the browser makes no cross-origin request and CORS/WS-origin never come up.
+ * Falls back to the build-time env var, then to a local backend for `pnpm dev`.
+ */
+function resolveApiBase(): string {
+  const runtime = typeof window !== "undefined" ? window.__OVLIVE_CONFIG__?.apiBase : undefined;
+  if (typeof runtime === "string") {
+    return runtime === "" ? window.location.origin : runtime.replace(/\/+$/, "");
+  }
+  const buildTime = import.meta.env.VITE_API_BASE as string | undefined;
+  return buildTime ? buildTime.replace(/\/+$/, "") : "http://127.0.0.1:8080";
+}
+
+export const API_BASE = resolveApiBase();
 
 // Center of the Netherlands, zoomed to a city region by default.
 export const NL_CENTER: [number, number] = [4.9041, 52.3676]; // Amsterdam

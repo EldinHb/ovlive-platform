@@ -1,0 +1,122 @@
+# Build the two OVLive images and push them to the GitHub Container Registry.
+#
+# No secrets to configure: pushes authenticate with the automatic GITHUB_TOKEN, scoped by the
+# `packages: write` permission below. Images land at ghcr.io/<owner>/ovlive-platform-{api,web} and
+# inherit the repository's visibility — a package from a private repo is private, and pulling
+# it on the host needs a PAT with read:packages (see docs/DEPLOY.md).
+#
+# Override the destination with the IMAGE_PREFIX repository variable if you want a different
+# owner or registry, e.g. ghcr.io/my-org.
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push makes an in-flight build for the same ref pointless; tags are never cancelled.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The Rust release build (lto, codegen-units=1) dominates; the web image is a few minutes.
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Image names, not crate/package names: the Rust crate is still `ovlive-server` and
+          # the SPA is still `@ovlive/web`. They carry the repo name because the owner's ghcr
+          # namespace is shared and already holds ovlive-server, ovlive-web and ovlive-api from
+          # the pre-Rust projects — one of which is still live. Prefixing with `ovlive-platform`
+          # keeps this repo's images from ever colliding with those.
+          - name: ovlive-platform-api
+            dockerfile: Dockerfile
+          - name: ovlive-platform-web
+            dockerfile: Dockerfile.web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name
+        id: img
+        # Through env, not `${{ }}` inside the script: a repository variable is untrusted
+        # input as far as the shell is concerned.
+        env:
+          IMAGE_PREFIX: ${{ vars.IMAGE_PREFIX }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE_NAME: ${{ matrix.name }}
+        run: |
+          prefix="${IMAGE_PREFIX:-ghcr.io/${OWNER}}"
+          # ghcr rejects uppercase in a path, and GitHub owners routinely have it.
+          prefix="$(printf '%s' "${prefix%/}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${prefix}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "registry=${prefix%%/*}" >> "$GITHUB_OUTPUT"
+
+      # Pull requests build but never push: a fork's GITHUB_TOKEN is read-only, so a push
+      # would fail rather than protect anything.
+      - name: Decide whether to push
+        id: mode
+        run: echo "push=${{ github.event_name != 'pull_request' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the registry
+        if: steps.mode.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.img.outputs.registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.img.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+          # Links the package to this repo in the GitHub UI, which is also what makes its
+          # visibility follow the repository's.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # amd64 only. An arm64 Rust release build would run under QEMU emulation and take
+          # hours; add a native arm64 runner to the matrix if you ever need that arch.
+          platforms: linux/amd64
+          push: ${{ steps.mode.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Summary
+        if: steps.mode.outputs.push == 'true'
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

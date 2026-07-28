@@ -37,6 +37,20 @@ just up             # docker compose up --build
 The API is documented at `/docs` (Scalar UI) once the server is running, with an
 interactive "try it with your API key" playground.
 
+## Production
+
+Images are built by `.github/workflows/docker.yml` and pushed to the GitHub Container
+Registry; `docker-compose.prod.yml` pulls them and runs postgres, the server, nginx and a
+Cloudflare Tunnel, with no port published to the host. See
+**[docs/DEPLOY.md](./docs/DEPLOY.md)**.
+
+```bash
+export IMAGE_PREFIX=ghcr.io/my-org IMAGE_TAG=latest
+export POSTGRES_PASSWORD=... ADMIN_EMAIL=... ADMIN_PASSWORD=... CLOUDFLARE_TUNNEL_TOKEN=...
+export GTFS_USER_AGENT='OVLive/0.1 (+contact: you@example.com)'   # quote it: parentheses
+just prod-pull && just prod-up
+```
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Key vars: `DATABASE_URL`, `DATA_DIR`, `BIND_ADDR`,

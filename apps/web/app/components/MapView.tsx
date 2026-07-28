@@ -505,7 +505,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     // The live WS is independent of the basemap — connect immediately so data flows
     // even if tiles are slow. Updates buffer into featuresRef and render on style load.
     const client = new LiveClient(
-      (import.meta.env.VITE_API_BASE as string) || "http://127.0.0.1:8080",
+      API_BASE,
       undefined,
       {
         onStatus: props.onStatus,
