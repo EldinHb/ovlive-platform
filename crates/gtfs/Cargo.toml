@@ -1,0 +1,20 @@
+[package]
+name = "ovlive-gtfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ovlive-core.workspace = true
+tokio.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+zip.workspace = true
+serde.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+dashmap.workspace = true
+csv.workspace = true
+arc-swap.workspace = true

@@ -1,0 +1,996 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OVLive API",
+    "version": "0.1.0",
+    "description": "Realtime Dutch public-transit data. Query live vehicles or stream them over WebSocket.\n\n**Auth**\n- Data endpoints are public \u2014 no key required (this is what the official web app uses). Supplying an API key (`Authorization: Bearer ovl_...`, `X-API-Key`, or `?key=` for the WebSocket) raises you from the shared anonymous rate limit to your own per-key limit. Register an account and create a key for programmatic/high-volume use.\n- Account & admin endpoints use HTTP Basic (your email + password).\n\n**WebSocket** `GET /v1/stream` (optionally `?key=ovl_...`) speaks protobuf (see packages/proto/ovlive.proto): send `Subscribe{viewport,filters}`, receive batched `Update{entered,moved,left}` diffs.\n\n**Deprecated endpoints** tagged `Deprecated` reproduce the pre-Rust OVLive API exactly so existing consumers keep working during migration. They will be removed \u2014 do not build against them."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key: ovl_..."
+      },
+      "Basic": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Account email + password"
+      }
+    }
+  },
+  "paths": {
+    "/v1/register": {
+      "post": {
+        "summary": "Register an account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8
+                  }
+                }
+              },
+              "example": {
+                "email": "you@example.com",
+                "password": "supersecret"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "409": {
+            "description": "Email exists"
+          }
+        }
+      }
+    },
+    "/v1/keys": {
+      "post": {
+        "summary": "Create an API key (returned once)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "rate_per_min": {
+                    "type": "integer",
+                    "default": 120
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key created"
+          }
+        }
+      },
+      "get": {
+        "summary": "List your API keys",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/keys/{id}": {
+      "delete": {
+        "summary": "Delete one of your API keys",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/vehicles": {
+      "get": {
+        "summary": "Snapshot of live vehicles",
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "bbox",
+            "in": "query",
+            "description": "minLon,minLat,maxLon,maxLat",
+            "schema": {
+              "type": "string"
+            },
+            "example": "4.3,51.8,5.1,52.2"
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "description": "comma list: bus,tram,metro,train,ferry",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owners",
+            "in": "query",
+            "description": "comma list of dataowners, e.g. RET,HTM",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "match vehicle/line/omloop number",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/vehicles/{id}": {
+      "get": {
+        "summary": "Vehicle detail (route shape, upcoming stops, predicted next trip)",
+        "description": "Includes `next_trip` (`{ line_public_number, destination, start_unix }` or null) \u2014 the line this vehicle becomes next, from KV78Turbo block/omloop chaining. The WS `VehicleState` carries the same as `next_line_public_number` / `next_destination` / `next_start_unix`.",
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "\"<dataowner>:<vehicle_number>\"",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/operators": {
+      "get": {
+        "summary": "Live dataowners with counts",
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/lines": {
+      "get": {
+        "summary": "Live public line numbers with counts",
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/admin/users": {
+      "get": {
+        "summary": "List all users (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Admin only"
+          }
+        }
+      }
+    },
+    "/v1/admin/keys": {
+      "get": {
+        "summary": "List all API keys (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/admin/keys/{id}/revoke": {
+      "post": {
+        "summary": "Revoke any API key (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked"
+          }
+        }
+      }
+    },
+    "/v1/admin/keys/{id}/unrevoke": {
+      "post": {
+        "summary": "Un-revoke an API key (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/admin/users/{id}/disable": {
+      "post": {
+        "summary": "Disable a user (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/admin/users/{id}/enable": {
+      "post": {
+        "summary": "Enable a user (admin)",
+        "security": [
+          {
+            "Basic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/realtime/trips": {
+      "get": {
+        "summary": "Realtime trips in a viewport",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{trips:[{id,agency,transportType,vehicleNumber,lat,lon,line,timestamp}]}`. Capped by `MAX_SPATIAL_RESULTS` (default 1500). Use `GET /v1/vehicles?bbox=` instead.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "neLat",
+            "in": "query",
+            "description": "Northeast latitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 52.2
+          },
+          {
+            "name": "neLon",
+            "in": "query",
+            "description": "Northeast longitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 5.1
+          },
+          {
+            "name": "swLat",
+            "in": "query",
+            "description": "Southwest latitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 51.8
+          },
+          {
+            "name": "swLon",
+            "in": "query",
+            "description": "Southwest longitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 4.3
+          },
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "Comma-separated extra trip ids, included regardless of the viewport",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "`invalid neLat` / `invalid viewport bounds` / `viewport too large` (plain text). Area is capped by `MAX_VIEWPORT_AREA`, default 2.0 deg\u00b2."
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/trips/{id}/times": {
+      "get": {
+        "summary": "Scheduled times for every stop of a trip",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{id,active,line,headsign,transportType,punctuality,state,operatingDay,stops:[{stopName,userStopCode,stopSequence,scheduledArrival,scheduledDeparture}]}`. **Two known differences:** `realtimeArrival`/`realtimeDeparture` are always absent (they required per-stop realtime passages, which cannot be joined to gtfs-nl \u2014 see CLAUDE.md), and ended trips 404 because no trip history is persisted, so `active` is always `true`. Both fields were `omitempty`, so the shape is unchanged. No replacement yet.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "`realtimeTripId` \u2014 `<DataOwnerCode>:<LinePlanningNumber>:<JourneyNumber>` (e.g. `RET:M1:1001`). This API's `<dataowner>:<vehicle_number>` vehicle id is also accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/details/{id}": {
+      "get": {
+        "summary": "Full trip detail: stops, shapes, schedule",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{id,dataOwner,line,journeyNumber,vehicleNumbers,headsign,description,omloopNumber,operatingDay,shapes,transportType,stops,hasInit}`. 404s when the trip has no matching GTFS schedule, as the old endpoint did. Use `GET /v1/vehicles/{id}`.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "`realtimeTripId` \u2014 `<DataOwnerCode>:<LinePlanningNumber>:<JourneyNumber>` (e.g. `RET:M1:1001`). This API's `<dataowner>:<vehicle_number>` vehicle id is also accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/status/{id}": {
+      "get": {
+        "summary": "Punctuality, state and position of a trip",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{punctuality,state,userStopCode,timestamp,lat,lon}`. `state` is one of `None|Init|Arrival|Departure|OnStop|OnRoute|OffRoute|End`. Use `GET /v1/vehicles/{id}` instead.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "`realtimeTripId` \u2014 `<DataOwnerCode>:<LinePlanningNumber>:<JourneyNumber>` (e.g. `RET:M1:1001`). This API's `<dataowner>:<vehicle_number>` vehicle id is also accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/location/{id}": {
+      "get": {
+        "summary": "Punctuality, state and position of a trip (alias of status)",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Identical to `/v1/realtime/status/{id}` \u2014 the old API served both paths from one handler. Use `GET /v1/vehicles/{id}` instead.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "`realtimeTripId` \u2014 `<DataOwnerCode>:<LinePlanningNumber>:<JourneyNumber>` (e.g. `RET:M1:1001`). This API's `<dataowner>:<vehicle_number>` vehicle id is also accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/search": {
+      "get": {
+        "summary": "Search realtime trips",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Matches line, vehicle, planning, block or journey number. Returns `{items:[...]}`, at most 10 (hard-coded, as before). Use `GET /v1/vehicles?search=` instead.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query",
+            "schema": {
+              "type": "string"
+            },
+            "example": "M1"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/journeyNumber/{id}": {
+      "get": {
+        "summary": "Journey number of a trip",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{journeyNumber}`. For a trip that is no longer live, the old endpoint fell back to SQL trip history; here it falls back to the GTFS schedule and otherwise 404s. Use `GET /v1/vehicles/{id}` instead.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "`realtimeTripId` \u2014 `<DataOwnerCode>:<LinePlanningNumber>:<JourneyNumber>` (e.g. `RET:M1:1001`). This API's `<dataowner>:<vehicle_number>` vehicle id is also accepted.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/realtime/findIdByVehicleNumber": {
+      "get": {
+        "summary": "Find a trip id by vehicle number",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{id}` (the `realtimeTripId`) for a currently-live vehicle. No replacement needed: this API's vehicle id is simply `<dataowner>:<vehicle_number>`.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "vehicleNumber",
+            "in": "query",
+            "description": "Vehicle number (required)",
+            "schema": {
+              "type": "string"
+            },
+            "example": "1001"
+          },
+          {
+            "name": "dataOwner",
+            "in": "query",
+            "description": "Data owner code (required)",
+            "schema": {
+              "type": "string"
+            },
+            "example": "RET"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "`404 page not found` (plain text)"
+          },
+          "400": {
+            "description": "`vehicleNumber and dataOwner are required` (plain text)"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/stops": {
+      "get": {
+        "summary": "Transit stops in a viewport",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{stops:[{stopId,stopName,lat,lon}]}`, capped by `MAX_STOPS_RESULTS` (default 500). Stations and gtfs-nl `stoparea:*` rows are excluded, as before. Ordering is nearest-to-viewport-centre; the old SQL had no `ORDER BY`. No replacement yet.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "neLat",
+            "in": "query",
+            "description": "Northeast latitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 52.2
+          },
+          {
+            "name": "neLon",
+            "in": "query",
+            "description": "Northeast longitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 5.1
+          },
+          {
+            "name": "swLat",
+            "in": "query",
+            "description": "Southwest latitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 51.8
+          },
+          {
+            "name": "swLon",
+            "in": "query",
+            "description": "Southwest longitude (required)",
+            "schema": {
+              "type": "number"
+            },
+            "example": 4.3
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "`invalid neLat` / `invalid viewport bounds` / `viewport too large` (plain text). Area is capped by `MAX_VIEWPORT_AREA`, default 2.0 deg\u00b2."
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/stops/search": {
+      "get": {
+        "summary": "Search stops by name",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{stops:[{stopName,stops:[{stopId,stopCode,lat,lon}]}]}` \u2014 grouped by name, prefix matches first, at most 20 distinct names. No replacement yet.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query, at least 2 characters (required)",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Rotterdam Centraal"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "`query must be at least 2 characters` (plain text)"
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/stops/stoptimes": {
+      "get": {
+        "summary": "Scheduled stop times for several stops",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. Returns `{stopTimes:[...]}` for the current service date, ordered by arrival, enriched with the live vehicle where one is running the trip. **No time window and no limit** (as before): a busy stop returns its whole day. No replacement yet.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "stopIds",
+            "in": "query",
+            "description": "Comma-separated stop ids (required)",
+            "schema": {
+              "type": "string"
+            },
+            "example": "3989424,3990091"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "`stopIds parameter is required` (plain text)"
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/stops/{stopId}/stoptimes": {
+      "get": {
+        "summary": "Scheduled stop times for one stop",
+        "description": "**Deprecated \u2014 will be removed.** Byte-compatible shim for consumers of the pre-Rust OVLive API: camelCase keys, capitalised enums (`\"Bus\"`, `\"OnStop\"`), `yyyyMMdd` `operatingDay`, and plain-text (not JSON) error bodies. Responses carry `Deprecation: true`. As `/v1/stops/stoptimes`, for a single stop. No replacement yet.",
+        "deprecated": true,
+        "tags": [
+          "Deprecated"
+        ],
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "stopId",
+            "in": "path",
+            "required": true,
+            "description": "GTFS `stop_id`",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "`internal error` (plain text) \u2014 feed not loaded yet"
+          },
+          "401": {
+            "description": "Invalid/revoked key (only when a key is supplied)"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Liveness + stats",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Deprecated",
+      "description": "Byte-compatible shim for consumers of the pre-Rust OVLive API. **Temporary \u2014 these will be removed once those consumers have migrated.** They intentionally keep the old paths, camelCase keys, capitalised enum values and plain-text error bodies, so they do not match the conventions of the rest of this API. Every response carries `Deprecation: true` and a `Link: </docs>; rel=\"deprecation\"` header. Prefer `/v1/vehicles*`; the stops endpoints have no replacement yet."
+    }
+  ]
+}

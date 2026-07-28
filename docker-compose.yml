@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ovlive
+      POSTGRES_PASSWORD: ovlive
+      POSTGRES_DB: ovlive
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ovlive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://ovlive:ovlive@postgres:5432/ovlive
+      DATA_DIR: /data
+      RUST_LOG: info,ovlive=debug
+      GTFS_URL: https://gtfs.ovapi.nl/gtfs-nl.zip
+      GTFS_USER_AGENT: "OVLive/0.1 (+contact: change-me@example.com)"
+      GTFS_REFRESH_TZ: Europe/Amsterdam
+      GTFS_REFRESH_HOUR: "3"
+      ZMQ_KV6_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7658
+      ZMQ_KV78_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7817
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: change-me-please
+    volumes:
+      - ovlive-data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:
+  ovlive-data:

@@ -1,0 +1,20 @@
+[package]
+name = "ovlive-persist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+sqlx.workspace = true
+bincode.workspace = true
+flate2.workspace = true
+serde.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+argon2.workspace = true
+sha2.workspace = true
+rand.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true

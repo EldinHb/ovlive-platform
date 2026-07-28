@@ -1,0 +1,89 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/proto",
+    "crates/core",
+    "crates/gtfs",
+    "crates/realtime",
+    "crates/persist",
+    "crates/api",
+    "crates/server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ovlive/ovlive"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+
+# web / api
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+hyper = "1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1.3"
+prost = "0.13"
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+# realtime data decoding
+zeromq = { version = "0.4", default-features = false, features = ["tokio-runtime", "all-transport"] }
+quick-xml = { version = "0.36", features = ["serialize"] }
+flate2 = "1"
+zip = "2"
+
+# http client (GTFS download)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip"] }
+csv = "1"
+arc-swap = "1"
+
+# spatial / data structures
+rstar = "0.12"
+dashmap = "6"
+
+# time
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+
+# db + auth
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "macros", "migrate"] }
+argon2 = "0.5"
+sha2 = "0.10"
+rand = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+governor = "0.6"
+
+# misc
+base64 = "0.22"
+
+# observability + errors
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "1"
+
+# internal crates
+ovlive-proto = { path = "crates/proto" }
+ovlive-core = { path = "crates/core" }
+ovlive-gtfs = { path = "crates/gtfs" }
+ovlive-realtime = { path = "crates/realtime" }
+ovlive-persist = { path = "crates/persist" }
+ovlive-api = { path = "crates/api" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,17 @@
+[package]
+name = "ovlive-realtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ovlive-core.workspace = true
+tokio.workspace = true
+zeromq.workspace = true
+quick-xml.workspace = true
+flate2.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+serde.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "ovlive-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ovlive-server"
+path = "src/main.rs"
+
+[dependencies]
+ovlive-core.workspace = true
+ovlive-proto.workspace = true
+ovlive-gtfs.workspace = true
+ovlive-realtime.workspace = true
+ovlive-persist.workspace = true
+ovlive-api.workspace = true
+tokio.workspace = true
+axum.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+// OVLive realtime WebSocket contract.
+// Single source of truth for the binary stream between the server and all clients
+// (web + mobile). Generates Rust types via prost (crates/proto) and TS types via
+// ts-proto (packages/api-types). REST endpoints use JSON and are NOT described here.
+package ovlive.v1;
+
+// ---------------------------------------------------------------------------
+// Shared enums
+// ---------------------------------------------------------------------------
+
+enum VehicleType {
+  VEHICLE_TYPE_UNSPECIFIED = 0;
+  BUS = 1;
+  TRAM = 2;
+  METRO = 3;
+  TRAIN = 4;
+  FERRY = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Client -> Server
+// ---------------------------------------------------------------------------
+
+// The rectangle the client is currently showing. Server only streams vehicles
+// inside it, and emits Leave/Enter as vehicles cross the boundary.
+message Viewport {
+  double min_lat = 1;
+  double min_lon = 2;
+  double max_lat = 3;
+  double max_lon = 4;
+  uint32 zoom = 5;
+}
+
+// Server-side filtering so clients only receive what they asked for.
+message Filters {
+  repeated VehicleType vehicle_types = 1; // empty = all types
+  repeated string dataowners = 2;         // e.g. "RET", "HTM"; empty = all
+  // Free-text match over vehicle number, public line number, or omloop/block code.
+  string search = 3;
+}
+
+// Vehicle ids the client wants streamed unconditionally — even when they fall outside the
+// viewport or don't match the filters. Used to keep a selected vehicle on the map (and
+// still updating) after the user pans away from it. Empty = nothing pinned.
+message Subscribe {
+  Viewport viewport = 1;
+  Filters filters = 2;
+  repeated string pinned = 3;
+}
+
+message UpdateViewport {
+  Viewport viewport = 1;
+  Filters filters = 2;
+  repeated string pinned = 3;
+}
+
+message ClientMessage {
+  oneof payload {
+    Subscribe subscribe = 1;
+    UpdateViewport update_viewport = 2;
+    bool ping = 3;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Server -> Client
+// ---------------------------------------------------------------------------
+
+// Full state for a vehicle entering the viewport (or in the initial snapshot).
+message VehicleState {
+  string id = 1;                 // "<dataowner>:<vehicle_number>"
+  string dataowner = 2;          // e.g. "RET"
+  string vehicle_number = 3;
+  string line_public_number = 4; // the number shown to the public, e.g. "25"
+  VehicleType vehicle_type = 5;
+  string operator_name = 6;      // for the marker logo lookup
+  double lat = 7;
+  double lon = 8;
+  float bearing = 9;             // degrees, 0 = north; NaN if unknown
+  int32 delay_seconds = 10;      // + = late, - = early
+  string destination = 11;
+  string block_code = 12;        // "omloop" / block_code
+  string journey_number = 13;
+  bool at_stop = 14;
+  string current_stop_id = 15;   // set while at_stop
+  string line_color = 16;        // GTFS route_color (6-hex, no '#'); "" if the line has none
+  string line_text_color = 17;   // GTFS route_text_color (6-hex, no '#'); "" if none
+  // Predicted NEXT trip for this vehicle: after the current journey ends, the same
+  // vehicle (block/omloop) typically continues as another line. Derived from KV78Turbo
+  // block chaining. All "" / 0 when unknown (block data missing, or last trip of the block).
+  string next_line_public_number = 18; // e.g. "47" — the line this vehicle becomes next
+  string next_destination = 19;        // headsign of the next trip
+  int64 next_start_unix = 20;          // scheduled start of the next trip (unix seconds; 0 if unknown)
+}
+
+// Lightweight position delta for a vehicle already in view.
+message VehicleMove {
+  string id = 1;
+  double lat = 2;
+  double lon = 3;
+  float bearing = 4;
+  int32 delay_seconds = 5;
+  bool at_stop = 6;
+  string current_stop_id = 7;
+}
+
+// One batched tick of changes for a subscription. Any repeated field may be empty.
+message Update {
+  repeated VehicleState entered = 1; // now in view (or initial snapshot)
+  repeated VehicleMove moved = 2;     // still in view, changed
+  repeated string left = 3;           // ids that left the viewport or ended
+  bool is_snapshot = 4;               // true for the first Update after Subscribe
+}
+
+message ServerError {
+  uint32 code = 1;
+  string message = 2;
+}
+
+message ServerMessage {
+  oneof payload {
+    Update update = 1;
+    bool pong = 2;
+    ServerError error = 3;
+  }
+}

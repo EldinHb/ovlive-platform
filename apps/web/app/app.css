@@ -1,0 +1,329 @@
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --bg: #f5f5f7;
+  --panel: rgba(255, 255, 255, 0.72);
+  --panel-solid: #ffffff;
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --border: rgba(0, 0, 0, 0.08);
+  --accent: #0071e3;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --radius: 16px;
+  --late: #ff3b30;
+  --early: #007aff;
+  --ontime: #34c759;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --panel: rgba(28, 28, 30, 0.72);
+    --panel-solid: #1c1c1e;
+    --text: #f5f5f7;
+    --text-dim: #98989d;
+    --border: rgba(255, 255, 255, 0.12);
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+#root { height: 100vh; }
+button { font-family: inherit; cursor: pointer; }
+
+.map-root { position: fixed; inset: 0; }
+.maplibregl-map { position: absolute; inset: 0; }
+
+/* Frosted glass panels */
+.panel {
+  background: var(--panel);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* Top-left brand + status */
+.hud-top {
+  position: absolute; top: 16px; left: 16px; z-index: 5;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+}
+.brand { font-weight: 700; letter-spacing: -0.02em; font-size: 17px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); transition: background .3s; }
+.status-dot.open { background: var(--ontime); }
+.status-dot.connecting { background: #ff9f0a; }
+.count { color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* Controls cluster top-right */
+.hud-right { position: absolute; top: 16px; right: 16px; z-index: 5; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+.seg { display: flex; padding: 4px; gap: 2px; }
+.seg button {
+  border: 0; background: transparent; color: var(--text-dim);
+  padding: 6px 12px; border-radius: 11px; font-size: 13px; font-weight: 500; transition: all .2s;
+}
+.seg button.active { background: var(--panel-solid); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+
+.icon-btn {
+  width: 52px; height: 52px; border: 1px solid var(--border); border-radius: 50%;
+  background: var(--panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  display: grid; place-items: center; font-size: 24px; box-shadow: var(--shadow); color: var(--text);
+}
+
+/* Settings popover (map theme + future options) */
+.settings { position: relative; }
+.settings-pop { position: absolute; top: 52px; right: 0; width: 200px; padding: 8px; }
+.settings-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);
+  padding: 6px 10px 8px;
+}
+.theme-list { display: flex; flex-direction: column; gap: 2px; }
+.theme-opt {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  padding: 10px 12px; border: 0; background: transparent; color: var(--text);
+  border-radius: 10px; font-size: 14px; text-align: left; transition: background .15s;
+}
+.theme-opt:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.theme-opt.active { background: var(--panel-solid); font-weight: 600; }
+.theme-opt .check { color: var(--accent); }
+
+/* Settings toggle row */
+.setting-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+  padding: 8px 12px; border: 0; background: transparent; color: var(--text); text-align: left; border-radius: 10px;
+}
+.setting-toggle:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.setting-label { display: block; font-size: 14px; }
+.setting-hint { display: block; font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+.switch { flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--border); position: relative; transition: background .2s; }
+.switch.on { background: var(--ontime); }
+.switch .knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .2s; }
+.switch.on .knob { transform: translateX(16px); }
+
+/* Language segmented control */
+.lang-seg { display: flex; gap: 4px; padding: 2px 6px 4px; }
+.lang-seg button {
+  flex: 1; padding: 8px 10px; border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+  border-radius: 10px; font-size: 13px; font-weight: 500; transition: all .15s;
+}
+.lang-seg button.active { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* Multi-select tabs */
+.vtabs {
+  flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 46px 4px 14px;
+}
+.vtab {
+  flex: none; display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 3px;
+  border-radius: 12px; border: 1px solid var(--border); background: transparent; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.vtab.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.vtab.ended .vtab-badge { opacity: .5; text-decoration: line-through; }
+.vtab-badge {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 26px;
+  padding: 0 9px; border-radius: 8px; color: #fff; font-weight: 700; font-size: 13px;
+  line-height: 1; white-space: nowrap;
+}
+.vtab-close {
+  border: 0; background: transparent; color: var(--text-dim); font-size: 12px; width: 18px; height: 18px;
+  border-radius: 50%; display: grid; place-items: center;
+}
+.vtab-close:hover { background: var(--border); color: var(--text); }
+
+/* Filters panel bottom-left */
+.filters { position: absolute; left: 16px; bottom: 16px; z-index: 5; width: 280px; overflow: hidden; }
+.filters-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; background: transparent; border: 0;
+  color: var(--text-dim); font-size: 13px; text-transform: uppercase; letter-spacing: .05em; padding: 14px 16px;
+}
+.filters-head > span:first-child { font-weight: 600; }
+.filters-count { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 7px; font-size: 11px; }
+.chev { margin-left: auto; font-size: 15px; color: var(--text); line-height: 1; }
+.filters-body { padding: 0 16px 16px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.chip {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  padding: 6px 12px; border-radius: 999px; font-size: 13px; transition: all .15s;
+}
+.chip.on { background: var(--accent); color: #fff; border-color: transparent; }
+.search {
+  width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--panel-solid); color: var(--text); font-size: 14px; outline: none;
+}
+.search:focus { border-color: var(--accent); }
+
+/* Vehicle side panel */
+.vpanel {
+  position: absolute; top: 16px; right: 16px; bottom: 16px; z-index: 6; width: 340px;
+  padding: 0; overflow: hidden; display: flex; flex-direction: column;
+  touch-action: pan-y; /* let vertical scroll through; we handle horizontal swipe */
+  animation: slidein .28s cubic-bezier(.22,.61,.36,1);
+}
+@keyframes slidein { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+.vpanel-head { flex: none; padding: 18px 18px 14px; border-bottom: 1px solid var(--border); }
+.vpanel-line {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 40px; height: 40px;
+  padding: 0 12px; border-radius: 10px; color: #fff; font-weight: 700; font-size: 18px;
+  line-height: 1; white-space: nowrap;
+}
+.vpanel-line.sm { min-width: 30px; height: 30px; font-size: 15px; border-radius: 8px; }
+.vpanel-title { display: flex; align-items: center; gap: 12px; }
+.vpanel-dest { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin-top: 10px; }
+/* Ended trip: dim the frozen header and surface the status + optional replacement. */
+.vpanel-head.ended { opacity: 0.6; }
+.ended-banner {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 12px;
+  background: rgba(255, 149, 0, 0.14); border: 1px solid rgba(255, 149, 0, 0.35);
+}
+.ended-title { font-weight: 600; font-size: 15px; color: var(--text); }
+.ended-sub { color: var(--text-dim); font-size: 13px; }
+.replacement-card {
+  margin-top: 16px; padding: 14px; border-radius: 12px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.replacement-label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+.replacement-trip { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.replacement-dest { font-size: 16px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.replacement-card .follow-chip { width: 100%; justify-content: center; }
+.vpanel-sub { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+/* Only this region scrolls — the tabs + header stay put. */
+.vpanel-body { flex: 1 1 auto; min-height: 0; padding: 16px 18px; overflow-y: auto; }
+.follow-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.follow-chip {
+  /* Idle chips are transparent over a translucent panel, so the map shows through behind
+     the text — accent-blue text on that has no stable background and reads at ~4.4:1 or
+     worse. Use --text (tracks the theme) for the off state; the accent only fills the
+     on/active state, which has its own opaque background. */
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; border: 1px solid var(--border); background: transparent; color: var(--text);
+  transition: background .15s;
+}
+.follow-chip:not(.live):not(.active):hover { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.follow-chip.live { color: var(--ontime); border-color: transparent; background: rgba(52,199,89,.14); }
+/* Darker than --accent so white text clears WCAG AA comfortably (~6.5:1) on the
+   frosted panel; brand blue (#0071e3) under white text is only ~4.7:1. */
+.follow-chip.active { color: #fff; border-color: transparent; background: #0058c4; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ontime); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+.vpanel-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.delay-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.delay-late { background: rgba(255,59,48,.15); color: var(--late); }
+.delay-early { background: rgba(0,122,255,.15); color: var(--early); }
+.delay-ontime { background: rgba(52,199,89,.15); color: var(--ontime); }
+/* Predicted next line (block/omloop chaining) — sits above the upcoming-stops list. */
+.next-trip {
+  margin: 0 0 18px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.next-trip-label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+.next-trip-row { display: flex; align-items: center; gap: 10px; }
+.next-trip-dest { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-trip-time { margin-left: auto; color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin: 4px 0 18px; }
+.meta-grid .k { font-size: 12px; color: var(--text-dim); }
+.meta-grid .v { font-size: 15px; font-weight: 500; }
+.at-stop { display: inline-flex; gap: 6px; align-items: center; color: var(--ontime); font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+
+/* Data freshness: how long ago the vehicle last reported a position. The dot carries the
+   signal at a glance; the age text is tabular so it doesn't jitter as it ticks each second. */
+.last-update { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); margin: -8px 0 18px; }
+.last-update .age-value { font-variant-numeric: tabular-nums; font-weight: 500; }
+.age-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.age-fresh .age-dot { background: var(--ontime); }
+.age-aging .age-dot { background: #ff9f0a; }
+.age-stale .age-dot { background: var(--late); }
+.age-aging .age-value { color: #ff9f0a; }
+.age-stale .age-value { color: var(--late); }
+
+.stops { list-style: none; margin: 0; padding: 0; }
+.stops li { display: flex; align-items: center; gap: 12px; padding: 9px 0; position: relative; }
+.stops li::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+/* Connect dot centre → next dot centre. Dots are vertically centred (align-items: center),
+   so their Y tracks each row's height — the line must too. top: 50% starts at this row's
+   dot centre (+5px clears the 9px dot); bottom: -50% reaches the next row's dot centre.
+   Fixed px offsets only lined up at one row height and left a gap on taller rows. */
+.stops li:not(:last-child)::after { content: ""; position: absolute; left: 4px; top: calc(50% + 5px); bottom: -50%; width: 1px; background: var(--border); }
+.stop-name { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; font-size: 14px; }
+/* Arrival cell: the countdown is what people actually read, so it carries the size and the
+   delay colour; the clock times sit under it as the reference (planned struck through only
+   once the delay has moved it by a minute). Tabular figures keep it from jittering per tick.
+   Deliberately NOT the global .delay-* classes — those paint a pill background. */
+.stop-time {
+  display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.stop-time .eta { font-size: 15px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.stop-time .eta-ontime { color: var(--text); }
+.stop-time .eta-late { color: var(--late); }
+.stop-time .eta-early { color: var(--early); }
+.stop-clock { display: inline-flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.stop-clock .planned { text-decoration: line-through; opacity: 0.75; }
+.stop-clock .expected { font-weight: 500; }
+.stops li.current::before { background: var(--ontime); box-shadow: 0 0 0 4px rgba(52, 199, 89, 0.2); }
+.stops li.current .stop-name { font-weight: 600; }
+.stop-now {
+  align-self: flex-start; font-size: 11px; font-weight: 600; color: var(--ontime);
+  background: rgba(52, 199, 89, 0.14); padding: 1px 7px; border-radius: 999px;
+}
+
+.icon-close { position: absolute; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
+.link-btn { display: inline-block; margin-top: 6px; color: var(--accent); font-size: 14px; text-decoration: none; font-weight: 500; }
+
+/* API key gate */
+.gate { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); padding: 24px; }
+.gate .card { width: 100%; max-width: 380px; padding: 28px; text-align: center; }
+.gate h1 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 6px; }
+.gate p { color: var(--text-dim); font-size: 14px; margin: 0 0 20px; }
+.gate input { margin-bottom: 12px; }
+.gate button {
+  width: 100%; padding: 11px; border: 0; border-radius: 12px; background: var(--accent); color: #fff;
+  font-size: 15px; font-weight: 600;
+}
+.gate .err { color: var(--late); font-size: 13px; margin-top: 10px; }
+
+/* --- Mobile (phones) --- */
+@media (max-width: 640px) {
+  .hud-top { top: 12px; left: 12px; padding: 8px 12px; gap: 8px; }
+  .brand { font-size: 15px; }
+  .count { font-size: 12px; }
+
+  .hud-right { top: 12px; right: 12px; gap: 8px; }
+  .seg { max-width: 60vw; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+  .seg::-webkit-scrollbar { display: none; }
+  .seg button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+  .icon-btn { width: 48px; height: 48px; font-size: 22px; }
+
+  /* Filter panel spans the bottom; collapsed to just its header by default. */
+  .filters { left: 12px; right: 12px; bottom: 12px; width: auto; }
+  .filters.open .filters-body { max-height: 44vh; overflow-y: auto; }
+  .chip { padding: 8px 14px; }
+  .search { padding: 12px; font-size: 16px; } /* 16px avoids iOS zoom-on-focus */
+
+  /* Vehicle detail becomes a bottom sheet that leaves the top half of the map visible. */
+  .vpanel {
+    top: auto; left: 0; right: 0; bottom: 0; width: auto;
+    max-height: 50vh; border-radius: 20px 20px 0 0;
+    animation: slideup .3s cubic-bezier(.22, .61, .36, 1);
+  }
+  .vpanel::before {
+    content: ""; position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    width: 40px; height: 5px; border-radius: 3px; background: var(--border);
+  }
+  .vpanel-head { padding-top: 24px; }
+}
+
+@keyframes slideup { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Detail page */
+.detail-root { min-height: 100vh; background: var(--bg); }
+.detail-map { height: 42vh; position: relative; }
+.detail-content { max-width: 640px; margin: 0 auto; padding: 24px 20px 60px; }
+.back { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); text-decoration: none; font-weight: 500; margin-bottom: 16px; }

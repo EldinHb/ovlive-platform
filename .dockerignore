@@ -1,0 +1,9 @@
+target/
+data/
+node_modules/
+apps/
+packages/api-types/node_modules/
+.git/
+.env
+*.md
+!README.md
