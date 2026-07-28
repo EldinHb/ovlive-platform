@@ -52,9 +52,11 @@ serves `http://0.0.0.0:8080`, docs at `/docs`.
 
 ### Diagnostic examples
 
-`crates/realtime/examples/` holds throwaway live-feed samplers (`kv78listen.rs` writes a
-Markdown report to `data/`; `nextlinelive.rs` prints live predictions). **Fair use: exactly one
-SUB connection per NDOV datastream — stop the server before running one.**
+`crates/realtime/examples/` holds throwaway live-feed samplers (`kv78listen.rs` and
+`nslisten.rs` write Markdown reports to `data/`; `nextlinelive.rs` prints live predictions).
+**Fair use: exactly one SUB connection per NDOV datastream — stop the server before running
+one.** `nslisten.rs` dumps a raw NS treinposities message plus an element census, which is how
+the train wire format below was established.
 
 `crates/gtfs/examples/validate_feed.rs` needs **no network**: it parses the cached
 `data/gtfs-nl.zip`, prints the counts the parser and stop indexes depend on, and asserts the
@@ -80,8 +82,10 @@ The feeds are free, best-effort, community-run. Being a bad citizen gets the pro
   Parser changes must be validated against the cached zip, never by re-fetching.
 - **Never buffer the archive in memory.** It is streamed to a `.part` file and atomically
   renamed; `stop_times.txt` is parsed by streaming the CSV out of the zip entry.
-- **One ZMQ SUB connection per stream, per process.** KV6 (`:7658`) and KV78Turbo (`:7817`) get
-  one each. Reconnects use capped exponential backoff plus an idle watchdog.
+- **One ZMQ SUB connection per stream, per process.** KV6 (`:7658`), KV78Turbo (`:7817`) and
+  NS InfoPlus (`:7664`) get one each. Reconnects use capped exponential backoff plus an idle
+  watchdog. Port 7664 carries ten InfoPlus envelopes; we subscribe only to
+  `/RIG/NStreinpositiesInterface5` so the other nine never hit the socket.
 - Data is attributed to the operators via OVapi / NDOV Loket; OVLive is independent, no SLA.
 
 ## Architecture
@@ -91,6 +95,7 @@ Postgres holds **only** accounts and API keys — never vehicle data.
 
 ```
 NDOV ZMQ KV6  (:7658, gzip XML)   → parse_kv6  → PosEvent      → LiveState (DashMap by vehicle)
+NDOV ZMQ NS   (:7664, gzip XML)   → parse_ns   → PosEvent      ↗  (trains; not in KV6)
 NDOV ZMQ KV78 (:7817, gzip pipes) → parse_kv78 → JourneyUpdate → BlockStore (next-line index)
 OVapi gtfs-nl.zip (daily, 304-aware) → GtfsStore (ArcSwap, hot-swapped) → enriches LiveTrip
 LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + REST snapshots
@@ -102,7 +107,7 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
 | Crate | Role |
 |---|---|
 | `core` | Domain only, zero I/O: `LiveTrip`, trip lifecycle, `Filters`, R-tree `VehicleIndex`, RD→WGS84, `BlockStore`. Where the unit tests live. |
-| `realtime` | ZMQ SUB loops + BISON decoders (`kv6.rs` XML, `kv78.rs` pipe-delimited). Emits normalized events over mpsc. |
+| `realtime` | ZMQ SUB loops + feed decoders (`kv6.rs` XML, `kv78.rs` pipe-delimited, `ns.rs` NS InfoPlus XML). Emits normalized events over mpsc. |
 | `gtfs` | Conditional download, streaming zip/CSV parse, `GtfsService` (hot-swappable feed) implementing `core::Enricher`, plus the day-scoped `StopIndexes` behind the deprecated stops endpoints. |
 | `persist` | Postgres accounts/keys (Argon2 passwords, SHA-256 key hashes) + generic gzip-bincode snapshots. |
 | `api` | axum router: REST JSON, protobuf WS, auth extractors, rate limiting, embedded OpenAPI. |
@@ -119,16 +124,27 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
 - **Trip lifecycle** (`core/src/state.rs::apply`): `INIT` replaces any prior trip for the vehicle;
   `END` removes it; a changed `journey_number` without an `END` is treated as a new trip; anything
   older than `STALE_TRIP_SECS` is swept. Vehicle id is `"<dataowner>:<vehicle_number>"`.
-- **Positions arrive as Rijksdriehoek (EPSG:28992) metres**, converted once on apply via the
+- **KV6 positions arrive as Rijksdriehoek (EPSG:28992) metres**, converted once on apply via the
   polynomial approximation in `core/src/rd.rs`. Bearing is derived from consecutive fixes and
-  deliberately held when the vehicle barely moved (anti-jitter).
+  deliberately held when the vehicle barely moved (anti-jitter). NS train positions are already
+  WGS84 and carry a GPS course, so `PosEvent` has both representations and `apply_fields` prefers
+  whatever the feed gave: no round-trip through a projection, no bearing guessed from two fixes.
+- **`delay_seconds` is only meaningful with `delay_known`.** Unknown and on-time are both `0`
+  otherwise, and the UI rendered that as a green "on time" pill — asserting punctuality for
+  trains, whose positions carry none. Anything reading delay must check the flag.
 - **The KV6 ↔ GTFS join is `trips.txt.realtime_trip_id`** = `"<dataowner>:<lineplanningnumber>:<journeynumber>"`
   (e.g. `HTM:11:110002`) → `GtfsStore.trip_by_key`. This is the only reliable join; ~99% of live
   vehicles enrich (public line, type, operator, headsign, route colors).
+  **`trip_by_key` collapses duplicates** (~2.1 trips share each realtime id — one per operating
+  pattern — 486k ids for 1.04M trips). That is fine for enrichment, whose fields are
+  day-invariant, but never invert it to ask "what is *this* trip's realtime id": the inverse
+  names only one trip per id, so every other day's trip looks as though the feed gave it none.
+  `TripInfo::realtime_trip_id` holds each trip's own value for that. (Inverting it is exactly
+  how departure boards came to show no live vehicles at many stops.)
 - **Enrichment is idempotent and lazy** — re-run only while `line_public_number` is still `None`,
   so a mid-run GTFS swap costs nothing.
 - **State survives restarts via snapshots**, not the database: `gtfs.snap`, `realtime.snap`,
-  `blocks.snap`, `gtfs_meta.bin` under `DATA_DIR` (gzip bincode, atomic temp+rename). Restored
+  `blocks.snap`, `train_delays.snap`, `gtfs_meta.bin` under `DATA_DIR` (gzip bincode, atomic temp+rename). Restored
   state is immediately pruned against `now`. Bincode has no schema evolution, so **adding a
   field to `GtfsStore`/`LiveTrip` invalidates the corresponding snapshot** — that is safe and
   self-healing (GTFS falls back to re-parsing the cached zip, live trips refill from the feed
@@ -139,6 +155,66 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
   HTTP Basic; the first boot seeds `ADMIN_EMAIL`/`ADMIN_PASSWORD` if `users` is empty.
 - **`sqlx` uses runtime queries, not the `query!` macros**, so the workspace builds with no live
   database. Keep it that way.
+
+### NS trains (the other non-obvious subsystem)
+
+**Trains are not in KV6 at all.** They come from NS InfoPlus on datastream `:7664`, of whose ten
+envelopes we take two — over **one** SUB connection, because fair use counts datastreams
+(`run_infoplus_stream`, dispatching on the topic frame):
+
+| envelope | gives | rate (measured) |
+|---|---|---|
+| `/RIG/NStreinpositiesInterface5` | position, speed, heading | full snapshot every ~11 s, ~300 KiB (14 KiB gzipped), ~294 trains / 375 material parts |
+| `/RIG/InfoPlusRITInterface5` | punctuality, `TreinDatum`, `TreinSoort` code | ~0.95 msg/s, ~40 KiB/s, median 14 station blocks |
+
+- **Vehicle id is `IFF:<TreinNummer>`** (e.g. `IFF:8743`), keyed by *train*, not by material
+  part. `IFF` is not an operator code — it's the prefix gtfs-nl puts on every rail
+  `realtime_trip_id`, so `LiveTrip::realtime_trip_id()` reproduces gtfs-nl's own
+  `IFF:SPR:8743` and stop departure boards resolve trains through `by_rt_id` with no
+  special-casing. The web app's operator table maps `IFF` → the NS brand.
+- **One dot per train, from the lowest `Materieelvolgnummer`.** Coupled units each report their
+  own GPS (measured: 216 trains with 1 part, 75 with 2, 3 with 3). Picking by *freshest* fix
+  instead would flip between units every cycle and slide the dot along the train's length.
+- **The feed republishes stale and future-dated fixes** — only 347/375 were current; the rest
+  ranged from minutes to *two weeks* old, and two were dated 23:59 by a unit with no clock. Old
+  fixes would appear and be pruned again on the next sweep (an ENTER/LEAVE flicker) and
+  future-dated ones would never expire at all. Both ends are rejected in `parse_ns_treinposities`
+  (`NS_MAX_FIX_AGE_SECS`, default 180 — keep it well under `STALE_TRIP_SECS`).
+- **There is no lifecycle**: no INIT, no END. A train just stops appearing, and the staleness
+  sweep removes it. Nothing infers an END from absence, so a GPS dropout in a tunnel freezes the
+  dot rather than making it vanish and reappear.
+- **The GTFS join is the bare train number** = `trips.txt.trip_short_name`, because the position
+  feed publishes no line code and no operating day. `GtfsStore.train_trips` maps number → rail
+  trips (`route_type` 2 only; gtfs-nl files rail-replacement buses under `IFF:` reusing the train
+  number), and the day is resolved against `service_dates`: `TreinDatum` when RitInfo has given
+  it, else the fix date, then the day before for after-midnight service. Candidates are
+  deliberately **not** collapsed the way `trip_by_key` collapses them — a number is a different
+  trip per operating pattern (median 2, max 34 across the feed). Measured **98% match** live
+  (240/245); the misses are empty stock and units on no scheduled trip, which still render as
+  trains because the parser sets `vehicle_type` itself.
+- `line_public_number` is the **type code** (`IC`, `SPR`, `ICD`, …), not `route_short_name` —
+  that's the prose "Intercity"/"Sprinter", too long for a map marker. Departure boards still show
+  the prose name, which is what NS shows there.
+- **Punctuality comes from RitInfo, and only for some trains.** `core/src/trains.rs` stores a
+  *delay curve* per train — `(expected instant, delay)` per station — evaluated against `now` on
+  every position update, because delay grows along a route and a scalar captured at receive time
+  is wrong minutes later. Delay is actual − planned from the `Gepland`/`Actueel` pair; departure
+  is preferred over arrival so a dwelling train isn't treated as past its station.
+  - Cold-start coverage is genuinely partial: **34% of position-reporting trains within 5 min**
+    (median 89 s to first mention), because RitInfo is published *on change* — a curve arrives
+    when a journey is created, often hours ahead, and again when its delay is revised. Hence
+    `train_delays.snap`, so a restart doesn't re-enter that window. Trains with no curve report
+    `delay_known: false`, never a fabricated 0.
+  - `/RIG/InfoPlusDVSInterface4` (departure boards) reached **72%** in the same window but at
+    **6× the message rate** for the same bytes. RitInfo was chosen because it carries the whole
+    journey in one message; add DVS alongside it if cold-start coverage matters more than CPU.
+  - `crates/realtime/examples/nsdelay.rs` is this measurement — re-run it before changing source.
+- **No next-line prediction for trains**: it comes from KV78Turbo, which carries no rail.
+- Only **NS** trains report positions. Arriva, Blauwnet, Eurobahn etc. are in the schedule (and in
+  `train_trips`) but never appear live.
+- Not implemented, though RitInfo carries it: per-stop expected times and platform
+  (`TreinVertrekSpoor`). Trains are the one mode where per-stop realtime *is* joinable — see the
+  `UserStopCode` measurement below for why buses can't have it.
 
 ### Next-line prediction (the non-obvious subsystem)
 
@@ -186,9 +262,12 @@ journeyNumber/{id}, findIdByVehicleNumber}` and
   tick in `VehicleIndex::by_rt_id`, never scanned per request — but responses always echo the
   old one.
 - **Removal is one commit**: delete `legacy.rs`, its `.merge(legacy::router())` line, the
-  `Deprecated` paths in `openapi.json`, `gtfs/src/stops.rs` + the `GtfsService::stops` field,
-  and `LegacyLimits`. `LiveTrip::{last_kind, has_init, agency_id}`, `VehicleIndex::by_rt_id`
-  and the extra GTFS columns are generally useful and can stay.
+  `Deprecated` paths in `openapi.json`, and `LegacyLimits`. `LiveTrip::{last_kind, has_init,
+  agency_id}`, `VehicleIndex::by_rt_id` and the extra GTFS columns are generally useful and can
+  stay. `gtfs/src/stops.rs` can no longer go wholesale: the supported `/v1/stops/viewport` (the
+  web app's stop layer) uses `StopIndexes::in_bbox`, so only `search`, the departure board
+  (`calls`/`day_trips`/`calls_on_service_date`/`departures`) and their tests go with legacy —
+  and with them the reason the index is day-scoped and rebuilt at midnight.
 - Every response carries `Deprecation: true` and `Link: </docs>; rel="deprecation"`, so
   consumers are detectable; `openapi.json` marks them `deprecated` under a `Deprecated` tag.
   Those headers are additive — bodies are unchanged.
@@ -254,6 +333,27 @@ Consequences, so this isn't rediscovered the hard way:
   upcoming stops, "continues as" card), `FiltersPanel`, NL/EN i18n in `app/lib/i18n.tsx`. It talks
   to the backend only through `@ovlive/api-types` (`LiveClient` WS + `RestClient`), aliased to
   source by `apps/web/vite.config.ts`. Check `apps/web` before claiming a feature is user-visible.
+- **The stop layer is REST, not the live stream.** Stops change only when the daily GTFS feed
+  swaps, so `MapView` fetches `GET /v1/stops/viewport` (supported; unrelated to the deprecated
+  `/v1/stops`) for a box padded 35% around the view and re-asks only when the user pans outside
+  it. Drawn from zoom 14, named from 15.5, and toggleable in the settings panel (persisted in
+  `localStorage`, default on). The server rejects boxes over 1 deg² and caps at 800/2000 stops —
+  a zoomed-out country view would otherwise serialise tens of thousands of quays per pan on a
+  keyless endpoint. Labels drop the `"<place>, "` prefix gtfs-nl puts on every stop name.
+- **Clicking a stop opens a departure board** (`StopPanel`, fed by `GET /v1/stops/{stopId}/departures`,
+  polled every 12 s). It is **quay-scoped, not station-scoped** — the clicked dot is one direction
+  of a multi-quay stop, which is also what makes the board coherent. Rows whose trip has a live
+  vehicle (`vehicle_id` non-null, resolved through `VehicleIndex::by_rt_id` keyed on that trip's
+  own `TripInfo::realtime_trip_id`) are buttons that pan
+  to that vehicle and select it, closing the board; the rest are schedule-only, because a vehicle
+  only enters the feed once its journey starts, so the *next* departure is often not yet trackable.
+  `expected_departure` applies the vehicle's **trip-level** delay — there is no per-stop realtime
+  to use (see the `UserStopCode` measurement above) — and only when the vehicle actually reported
+  one: `delay_seconds` is `null`, not `0`, for a live train whose RitInfo we haven't seen.
+  The board replaces the vehicle panel while
+  open (they share `.vpanel`, so both get the desktop dock / mobile sheet and `panelAwareOffset`),
+  leaving the vehicle selection intact underneath, and opening one stops following so the camera
+  isn't dragged off. Times are seconds-since-local-midnight, the same axis as `upcoming_stops`.
 - `apps/mobile` (Expo, Phase 3) does not exist yet. `migrations/0001` reserves a `trip_history`
   table for Phase 4 that nothing writes to.
 - Comments explain *why* (feed quirks, policy, CPU trade-offs), not *what*. Match that: the

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { Vehicle, VehicleDetail } from "@ovlive/api-types";
+import { etaLabel, useNow } from "../lib/clock";
 import {
   distanceMeters,
   etaSeconds,
@@ -51,43 +52,6 @@ function ShareButton({ id, t }: { id: string; t: TFn }) {
       {copied ? `✓ ${t("action.copied")}` : `🔗 ${t("action.share")}`}
     </button>
   );
-}
-
-/**
- * A clock that re-renders once a second. The detail endpoint is only polled every 8 s, so the
- * age and the arrival countdowns have to tick locally — otherwise they'd jump in 8-second steps.
- */
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const h = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(h);
-  }, []);
-  return now;
-}
-
-/**
- * Countdown to a stop arrival, always down to the second. Seconds are zero-padded so the
- * tabular-figure column keeps its width as it ticks instead of shifting every ten seconds.
- *
- * The seconds carry real per-stop information for most operators — measured over 142 live
- * trips / 2164 scheduled calls, the share of stop times not landing on `:00` is HTM 96%,
- * GVB 95%, RET 70%, KEOLIS 58%, EBS 47%, but **0% for CXX / ARR / QBUZZ**, which publish
- * whole minutes. For those three the seconds digit is just `delay % 60` and is therefore
- * constant across the trip. It also means the countdown is finer-grained than the clock
- * line beside it, which renders HH:MM and drops the schedule's seconds.
- */
-function etaLabel(secs: number, t: TFn): string {
-  if (secs <= 0) return t("eta.now");
-  if (secs < 60) return t("eta.secs", { n: secs });
-  const s = pad2(secs % 60);
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return t("eta.minsSecs", { n: mins, s });
-  return t("eta.hoursMinsSecs", { h: Math.floor(mins / 60), n: pad2(mins % 60), s });
-}
-
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
 }
 
 /**
@@ -182,8 +146,16 @@ export function VehiclePanel({
   const line = v?.line_public_number ?? basic?.line ?? "?";
   const destination = v?.destination ?? basic?.destination ?? "—";
   const liveDelay = basic?.delay ?? v?.delay_seconds ?? 0;
-  const delay = formatDelay(liveDelay);
-  const delayText = delay.kind === "ontime" ? t("delay.onTime") : delay.text;
+  // Trains take punctuality from a different feed than their positions, so "we don't know" is
+  // a real state here — distinct from on time. Prefer the WS flag, then the REST one.
+  const delayKnown = basic?.delayKnown ?? v?.delay_known ?? false;
+  const delay = formatDelay(liveDelay, delayKnown);
+  const delayText =
+    delay.kind === "ontime"
+      ? t("delay.onTime")
+      : delay.kind === "unknown"
+        ? t("delay.unknown")
+        : delay.text;
   const type = basic?.type ?? 0;
   const typeText = t(TYPE_KEYS[type] ?? "type.vehicle");
 
@@ -385,9 +357,7 @@ export function VehiclePanel({
           </div>
         )}
 
-        <h3 style={{ margin: "0 0 10px", fontSize: 13, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: ".05em" }}>
-          {t("stops.next")}
-        </h3>
+        <h3 className="section-title">{t("stops.next")}</h3>
         {loading && !detail && <div className="vpanel-sub">{t("stops.loading")}</div>}
         {detail && detail.upcoming_stops.length === 0 && (
           <div className="vpanel-sub">{t("stops.none")}</div>

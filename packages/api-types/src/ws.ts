@@ -23,6 +23,7 @@ function toVehicle(s: any): Vehicle {
     lon: s.lon,
     bearing: Number.isFinite(s.bearing) ? s.bearing : null,
     delay: s.delay_seconds || 0,
+    delayKnown: !!s.delay_known,
     destination: s.destination || "",
     block: s.block_code || "",
     journey: s.journey_number || "",
@@ -43,6 +44,7 @@ function toMove(m: any): MoveDelta {
     lon: m.lon,
     bearing: Number.isFinite(m.bearing) ? m.bearing : null,
     delay: m.delay_seconds || 0,
+    delayKnown: !!m.delay_known,
     atStop: !!m.at_stop,
     currentStopId: m.current_stop_id || "",
   };

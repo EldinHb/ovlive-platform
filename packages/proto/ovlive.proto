@@ -79,7 +79,11 @@ message VehicleState {
   double lat = 7;
   double lon = 8;
   float bearing = 9;             // degrees, 0 = north; NaN if unknown
-  int32 delay_seconds = 10;      // + = late, - = early
+  int32 delay_seconds = 10;      // + = late, - = early; only meaningful if delay_known
+  // Whether delay_seconds is measured or just its zero default. Trains take punctuality from
+  // a separate feed (InfoPlus RitInfo) that doesn't cover every train, and KV6 omits it on
+  // some message kinds — without this, "unknown" and "on time" are indistinguishable.
+  bool delay_known = 21;
   string destination = 11;
   string block_code = 12;        // "omloop" / block_code
   string journey_number = 13;
@@ -102,6 +106,7 @@ message VehicleMove {
   double lon = 3;
   float bearing = 4;
   int32 delay_seconds = 5;
+  bool delay_known = 8;
   bool at_stop = 6;
   string current_stop_id = 7;
 }

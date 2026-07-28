@@ -71,6 +71,46 @@ fn main() -> anyhow::Result<()> {
     );
     anyhow::ensure!(running > 0, "no trips run on {date} — check the calendar parse");
 
+    // The train join: NS InfoPlus identifies a train only by its number, so `train_trips` is
+    // the sole path from a live train to its schedule. Assert the non-obvious parts — that
+    // candidates are per operating pattern rather than collapsed, and that a number resolves
+    // to exactly one trip on a given day.
+    let candidates: usize = store.train_trips.values().map(|v| v.len()).sum();
+    let resolved = store
+        .train_trips
+        .keys()
+        .filter(|n| store.resolve_train_trip(n, date).is_some())
+        .count();
+    println!(
+        "  train numbers={} candidate rail trips={} ({:.1} per number); resolve on {date} -> {resolved}",
+        store.train_trips.len(),
+        candidates,
+        candidates as f64 / store.train_trips.len().max(1) as f64,
+        );
+    anyhow::ensure!(
+        store.train_trips.len() > 1000,
+        "only {} train numbers indexed — the NS position feed would not join",
+        store.train_trips.len()
+    );
+    anyhow::ensure!(
+        candidates > store.train_trips.len(),
+        "one candidate per number means duplicates were collapsed; day resolution needs them all"
+    );
+    anyhow::ensure!(resolved > 0, "no train number resolves to a trip running on {date}");
+    // Every trip must carry its *own* realtime id: inverting the collapsed `trip_by_key`
+    // instead is what silently stopped departure boards resolving live vehicles.
+    let with_rt = store.trips.values().filter(|t| t.realtime_trip_id.is_some()).count();
+    println!(
+        "  trips with their own realtime_trip_id={with_rt}/{} (distinct ids={})",
+        store.trips.len(),
+        store.trip_by_key.len()
+    );
+    anyhow::ensure!(
+        with_rt > store.trip_by_key.len(),
+        "per-trip realtime ids ({with_rt}) should outnumber distinct ids ({}) — they share",
+        store.trip_by_key.len()
+    );
+
     println!("building stop indexes for {date} ...");
     let t = Instant::now();
     let idx = StopIndexes::build(store.clone(), date);

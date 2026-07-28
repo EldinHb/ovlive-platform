@@ -10,12 +10,12 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use config::Config;
 use dashmap::DashMap;
-use ovlive_core::{BlockSnapshot, BlockStore, LiveState, LiveTrip};
+use ovlive_core::{BlockSnapshot, BlockStore, LiveState, LiveTrip, TrainDelaySnapshot, TrainDelays};
 use ovlive_gtfs::{
     load_and_swap, refresh_once, seconds_until_next, FeedMeta, GtfsConfig, GtfsService, GtfsStore,
 };
 use ovlive_persist::{snapshot, Db};
-use ovlive_realtime::{run_journey_stream, run_stream, StreamConfig, StreamKind};
+use ovlive_realtime::{run_infoplus_stream, run_journey_stream, run_stream, StreamConfig, StreamKind};
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -25,6 +25,7 @@ const GTFS_META: &str = "gtfs_meta.bin";
 const GTFS_ZIP: &str = "gtfs-nl.zip";
 const RT_SNAP: &str = "realtime.snap";
 const BLOCK_SNAP: &str = "blocks.snap";
+const TRAIN_SNAP: &str = "train_delays.snap";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,8 +56,27 @@ async fn main() -> Result<()> {
     spawn_gtfs_refresh(gtfs.clone(), gtfs_cfg, data_dir.clone(), cfg.gtfs_tz);
     spawn_stop_index_refresh(gtfs.clone(), cfg.gtfs_tz);
 
+    // --- Train punctuality (NS InfoPlus RitInfo) ---
+    // Built before `LiveState` because train positions consult it on every update. Restored
+    // from disk so a restart doesn't re-enter the cold window where delays are unknown.
+    let train_delays = Arc::new(TrainDelays::new());
+    if cfg.zmq_ns_enabled && cfg.zmq_ns_rit_enabled {
+        if let Ok(Some(snap)) =
+            snapshot::load::<TrainDelaySnapshot>(&snapshot::path_in(&data_dir, TRAIN_SNAP))
+        {
+            train_delays.restore(snap);
+            let cutoff = Utc::now() - chrono::Duration::seconds(cfg.train_delay_prune_secs);
+            let pruned = train_delays.prune(cutoff);
+            info!(
+                "restored {} train delay curves ({} pruned as stale)",
+                train_delays.len(),
+                pruned
+            );
+        }
+    }
+
     // --- Live state: restore realtime snapshot ---
-    let live = Arc::new(LiveState::new(cfg.stale_trip_secs));
+    let live = Arc::new(LiveState::new(cfg.stale_trip_secs).with_train_delays(train_delays.clone()));
     if let Ok(Some(trips)) = snapshot::load::<Vec<LiveTrip>>(&snapshot::path_in(&data_dir, RT_SNAP)) {
         let n = trips.len();
         live.load(trips);
@@ -65,6 +85,8 @@ async fn main() -> Result<()> {
     }
 
     // --- Ingestion: ZMQ streams -> applier ---
+    // Both position feeds normalize to `PosEvent` and share one applier: KV6 for road/rail
+    // transit, NS InfoPlus for trains (which KV6 doesn't carry).
     let (ev_tx, mut ev_rx) = mpsc::channel(50_000);
     tokio::spawn(run_stream(
         StreamConfig {
@@ -73,9 +95,39 @@ async fn main() -> Result<()> {
             kind: StreamKind::Kv6,
             topics: cfg.zmq_kv6_topics.clone(),
             idle_timeout: Duration::from_secs(cfg.zmq_idle_timeout_secs),
+            max_fix_age: Duration::from_secs(cfg.ns_max_fix_age_secs),
         },
         ev_tx.clone(),
     ));
+    if cfg.zmq_ns_enabled {
+        // One connection, both envelopes: positions to the applier, RitInfo to the delay store.
+        let (rit_tx, mut rit_rx) = mpsc::channel(10_000);
+        tokio::spawn(run_infoplus_stream(
+            StreamConfig {
+                name: "NS InfoPlus".into(),
+                endpoint: cfg.zmq_ns_endpoint.clone(),
+                kind: StreamKind::NsTreinposities,
+                topics: cfg.zmq_ns_topics.clone(),
+                idle_timeout: Duration::from_secs(cfg.zmq_idle_timeout_secs),
+                max_fix_age: Duration::from_secs(cfg.ns_max_fix_age_secs),
+            },
+            ev_tx.clone(),
+            cfg.zmq_ns_rit_enabled.then(|| rit_tx.clone()),
+        ));
+        if cfg.zmq_ns_rit_enabled {
+            let delays = train_delays.clone();
+            tokio::spawn(async move {
+                while let Some(u) = rit_rx.recv().await {
+                    delays.apply(u, Utc::now());
+                }
+            });
+            spawn_train_delay_upkeep(train_delays.clone(), cfg.train_delay_prune_secs, data_dir.clone());
+        } else {
+            info!("NS RitInfo disabled; train punctuality will be reported as unknown");
+        }
+    } else {
+        info!("NS train positions disabled; trains will not appear");
+    }
     {
         let live = live.clone();
         let gtfs = gtfs.clone();
@@ -105,6 +157,7 @@ async fn main() -> Result<()> {
                 kind: StreamKind::Kv78Turbo,
                 topics: cfg.zmq_kv78_topics.clone(),
                 idle_timeout: Duration::from_secs(cfg.zmq_idle_timeout_secs),
+                max_fix_age: Duration::from_secs(cfg.ns_max_fix_age_secs),
             },
             j_tx,
         ));
@@ -272,6 +325,27 @@ async fn do_refresh(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Prune stale delay curves and snapshot the store, so a restart keeps train punctuality.
+fn spawn_train_delay_upkeep(delays: Arc<TrainDelays>, prune_secs: i64, data_dir: String) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(120));
+        loop {
+            interval.tick().await;
+            let removed = delays.prune(Utc::now() - chrono::Duration::seconds(prune_secs));
+            if removed > 0 {
+                tracing::debug!("pruned {} stale train delay curves ({} left)", removed, delays.len());
+            }
+            let path = snapshot::path_in(&data_dir, TRAIN_SNAP);
+            let snap = delays.snapshot();
+            match tokio::task::spawn_blocking(move || snapshot::save(&path, &snap)).await {
+                Ok(Ok(())) => tracing::debug!("{} train delay curves snapshotted", delays.len()),
+                Ok(Err(e)) => warn!("train delay snapshot save failed: {e}"),
+                Err(e) => warn!("train delay snapshot task panicked: {e}"),
+            }
+        }
+    });
 }
 
 fn spawn_tick_loop(

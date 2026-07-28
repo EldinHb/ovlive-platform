@@ -43,6 +43,8 @@ export interface Vehicle {
   lon: number;
   bearing: number | null;
   delay: number;
+  /** Whether `delay` is measured. False = unknown, which is not the same as on time. */
+  delayKnown: boolean;
   destination: string;
   block: string;
   journey: string;
@@ -66,6 +68,8 @@ export interface MoveDelta {
   lon: number;
   bearing: number | null;
   delay: number;
+  /** Whether `delay` is measured. False = unknown, which is not the same as on time. */
+  delayKnown: boolean;
   atStop: boolean;
   currentStopId: string;
 }
@@ -75,6 +79,62 @@ export interface NormalizedUpdate {
   moved: MoveDelta[];
   left: string[];
   isSnapshot: boolean;
+}
+
+/** A boardable quay, as returned by the stop-layer endpoint. */
+export interface StopSummary {
+  stop_id: string;
+  name: string;
+  /** Operator stop code (`stops.txt.stop_code`) — not a GTFS key. */
+  code: string | null;
+  platform_code: string | null;
+  parent_station: string | null;
+  lat: number;
+  lon: number;
+}
+
+/** REST stop-layer response (`GET /v1/stops/viewport`). */
+export interface StopsResponse {
+  count: number;
+  /** `limit` was hit, so the result only covers the centre of the requested box. */
+  truncated: boolean;
+  stops: StopSummary[];
+}
+
+/**
+ * One scheduled departure from a stop. Times are seconds since **today's** local
+ * (Europe/Amsterdam) midnight — the same axis as `upcoming_stops` — so they can be negative
+ * or exceed 86400 for after-midnight service; use `etaSeconds`/`secsToClock` on them.
+ */
+export interface StopDeparture {
+  trip_id: string;
+  realtime_trip_id: string | null;
+  /** Live vehicle running this trip; null until it starts reporting. Selectable on the map. */
+  vehicle_id: string | null;
+  vehicle_lat: number | null;
+  vehicle_lon: number | null;
+  line: string;
+  vehicle_type: string;
+  /** GTFS `agency_id` of the route (e.g. `GVB`). */
+  operator: string | null;
+  headsign: string;
+  stop_sequence: number;
+  scheduled_arrival: number;
+  scheduled_departure: number;
+  /** `scheduled_departure` plus the live vehicle's trip delay; equal to it when not live. */
+  expected_departure: number;
+  delay_seconds: number | null;
+  at_stop: boolean;
+  line_color: string | null;
+  line_text_color: string | null;
+}
+
+/** REST departure-board response (`GET /v1/stops/{stopId}/departures`). */
+export interface StopDeparturesResponse {
+  stop: StopSummary;
+  /** Service date the board is anchored to, `yyyy-mm-dd`. */
+  service_date: string;
+  departures: StopDeparture[];
 }
 
 /** REST vehicle-detail response. */
@@ -91,6 +151,8 @@ export interface VehicleDetail {
     lon: number;
     bearing: number | null;
     delay_seconds: number;
+    /** Whether `delay_seconds` is measured. False = unknown, not on time. */
+    delay_known: boolean;
     destination: string | null;
     block_code: string | null;
     journey_number: string | null;

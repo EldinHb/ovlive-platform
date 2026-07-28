@@ -43,6 +43,7 @@ pub fn to_state(t: &LiveTrip, next: Option<NextTrip>) -> pb::VehicleState {
         lon: t.lon,
         bearing: t.bearing,
         delay_seconds: t.delay_seconds,
+        delay_known: t.delay_known,
         destination: t.destination.clone().unwrap_or_default(),
         block_code: t.block_code.clone().unwrap_or_default(),
         journey_number: t.journey_number.clone().unwrap_or_default(),
@@ -75,6 +76,7 @@ pub fn to_move(t: &LiveTrip) -> pb::VehicleMove {
         lon: t.lon,
         bearing: t.bearing,
         delay_seconds: t.delay_seconds,
+        delay_known: t.delay_known,
         at_stop: t.at_stop,
         current_stop_id: t.current_stop_id.clone().unwrap_or_default(),
     }

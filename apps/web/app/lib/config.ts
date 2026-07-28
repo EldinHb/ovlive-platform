@@ -28,6 +28,17 @@ export function setSavedMultiSelect(on: boolean) {
   } catch {}
 }
 
+// Stops are on by default; the key stores "0" only once the user has turned them off.
+const STOPS_KEY = "ovlive_stops";
+export function getSavedShowStops(): boolean {
+  return typeof localStorage === "undefined" || localStorage.getItem(STOPS_KEY) !== "0";
+}
+export function setSavedShowStops(on: boolean) {
+  try {
+    localStorage.setItem(STOPS_KEY, on ? "1" : "0");
+  } catch {}
+}
+
 export interface SavedView {
   lng: number;
   lat: number;

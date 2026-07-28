@@ -27,15 +27,37 @@ export interface MapTheme {
   id: string;
   label: string;
   style: string | StyleSpecification;
+  /** Basemap is dark — the overlays we draw ourselves (markers, stops) invert on this. */
   dark: boolean;
 }
 
 export const THEMES: MapTheme[] = [
   { id: "colorful", label: "Colorful", style: COLORFUL_STYLE, dark: false },
   { id: "neutrino", label: "Neutrino", style: NEUTRINO_STYLE, dark: false },
-  { id: "graybeard", label: "Graybeard", style: GRAYBEARD_STYLE, dark: true },
+  // Graybeard is monochrome but light (a near-white canvas), not a dark style.
+  { id: "graybeard", label: "Graybeard", style: GRAYBEARD_STYLE, dark: false },
   { id: "eclipse", label: "Eclipse", style: ECLIPSE_STYLE, dark: true },
   { id: "osm", label: "OSM", style: OSM_STYLE, dark: false },
 ];
 
 export const DEFAULT_THEME = THEMES[0];
+
+/** Fill, text and border of a vehicle marker (dot at low zoom, pill at high zoom). */
+export interface MarkerPalette {
+  bg: string;
+  fg: string;
+  stroke: string;
+}
+
+/**
+ * Vehicle markers are one neutral colour for every vehicle — no per-line/operator brand
+ * colours — and take their tone from the basemap: a near-white pill on a light style, a
+ * near-black one on a dark style, so the marker layer reads as part of the map rather than
+ * fighting it. Legibility then comes from the text and the border, not from the fill, which is
+ * why the border is a firm mid-tone in both directions instead of a faint tint.
+ */
+export function markerPalette(dark: boolean): MarkerPalette {
+  return dark
+    ? { bg: "#171b21", fg: "#e8ebef", stroke: "rgba(232,235,239,0.45)" }
+    : { bg: "#fbfbfc", fg: "#22262c", stroke: "rgba(34,38,44,0.45)" };
+}

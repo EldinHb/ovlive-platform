@@ -45,7 +45,8 @@ impl Default for GtfsConfig {
 #[derive(Default)]
 pub struct GtfsService {
     store: ArcSwapOption<GtfsStore>,
-    /// Day-scoped stop indexes for the deprecated `/v1/stops/*` endpoints. Rebuilt on every
+    /// Stop indexes: the (day-independent) viewport grid behind `/v1/stops/viewport`, plus the
+    /// day-scoped departure board for the deprecated `/v1/stops/*` endpoints. Rebuilt on every
     /// feed swap and at local midnight; `None` until the first build finishes.
     stops: ArcSwapOption<StopIndexes>,
 }

@@ -1,9 +1,10 @@
 //! Stop-oriented indexes over a loaded [`GtfsStore`]: viewport lookup, name search, and
 //! departure boards.
 //!
-//! These exist for the deprecated `/v1/stops/*` endpoints (see `ovlive_api::legacy`) and are
-//! deliberately kept **outside** `GtfsStore` so they add nothing to the snapshot format and
-//! can be deleted in one piece once those endpoints go.
+//! They are deliberately kept **outside** `GtfsStore` so they add nothing to the snapshot format.
+//! [`StopIndexes::in_bbox`] backs the supported `/v1/stops/viewport` (the web app's stop layer)
+//! and stays; name search and the departure board exist only for the deprecated `/v1/stops/*`
+//! endpoints (see `ovlive_api::legacy`) and go when those do.
 //!
 //! The departure board is the expensive part, and the reason it is day-scoped: the feed spans
 //! several weeks (~30M `stop_times` rows), so a full `stop_id -> stop_times` reverse index
@@ -267,13 +268,6 @@ impl StopIndexes {
 
 /// Collect the trips running on `date` and `date - 1` and index their calls per stop.
 fn build_board(store: &GtfsStore, date: NaiveDate) -> (Vec<DayTrip>, HashMap<String, Vec<Call>>) {
-    // `trip_by_key` maps realtime id -> trip id; we need the inverse for the day's trips.
-    // Built once per rebuild (twice a day) and dropped immediately.
-    let mut rt_by_trip: HashMap<&str, &str> = HashMap::with_capacity(store.trip_by_key.len());
-    for (rt_id, trip_id) in &store.trip_by_key {
-        rt_by_trip.insert(trip_id.as_str(), rt_id.as_str());
-    }
-
     let today = ymd_u32(date);
     let yesterday = date.pred_opt().map(ymd_u32);
 
@@ -297,7 +291,7 @@ fn build_board(store: &GtfsStore, date: NaiveDate) -> (Vec<DayTrip>, HashMap<Str
         let slot = day_trips.len() as u32;
         day_trips.push(DayTrip {
             trip_id: trip.trip_id.clone(),
-            rt_id: rt_by_trip.get(trip.trip_id.as_str()).map(|s| s.to_string()),
+            rt_id: trip.realtime_trip_id.clone(),
         });
         for st in times {
             // A shifted trip whose whole run is already in the past adds nothing.
@@ -364,6 +358,7 @@ mod tests {
                 shape_id: None,
                 service_id: "S1".into(),
                 long_name: String::new(),
+                realtime_trip_id: Some("RET:M1:1001".into()),
             },
         );
         s.stop_times.insert(
@@ -487,6 +482,32 @@ mod tests {
         assert_eq!(deps[0].trip.trip_id, "T1");
         assert_eq!(deps[0].realtime_trip_id, Some("RET:M1:1001"));
         assert_eq!(deps[0].scheduled_departure, 36_060);
+
+        // Same realtime id on a second operating pattern, and `trip_by_key` keeps *that* one:
+        // the board must still name the id for the trip actually running today. Inverting
+        // `trip_by_key` reported None here, so no departure could be joined to its vehicle.
+        let mut s = store();
+        s.trips.insert(
+            "T2".into(),
+            TripInfo {
+                trip_id: "T2".into(),
+                route_id: "RT1".into(),
+                headsign: "Blaak".into(),
+                block_id: None,
+                shape_id: None,
+                service_id: "S2".into(),
+                long_name: String::new(),
+                realtime_trip_id: Some("RET:M1:1001".into()),
+            },
+        );
+        s.stop_times.insert("T2".into(), s.stop_times["T1"].clone());
+        s.service_dates.insert("S2".into(), vec![20_260_728]); // a different day
+        s.trip_by_key.insert("RET:M1:1001".into(), "T2".into()); // collapsed: T2 wins
+        let i = StopIndexes::build(Arc::new(s), NaiveDate::from_ymd_opt(2026, 7, 27).unwrap());
+        let deps = i.departures("R1", 36_000, 600, 10);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].trip.trip_id, "T1", "only T1 runs on the 27th");
+        assert_eq!(deps[0].realtime_trip_id, Some("RET:M1:1001"));
 
         // A window that ends before the departure yields nothing.
         assert!(i.departures("R1", 30_000, 60, 10).is_empty());

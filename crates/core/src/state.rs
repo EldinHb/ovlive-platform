@@ -10,6 +10,11 @@ use rstar::{primitives::GeomWithData, RTree, AABB};
 use crate::filter::{BBox, Filters};
 use crate::model::{LiveTrip, MessageKind, PosEvent};
 use crate::rd;
+use crate::trains::TrainDelays;
+
+/// Vehicle-key namespace for trains — see `ovlive_realtime::TRAIN_DATAOWNER`. Trains are the
+/// only vehicles whose punctuality arrives on a different feed from their positions.
+const TRAIN_DATAOWNER: &str = "IFF";
 
 /// Fills schedule-derived fields (public line number, destination, vehicle type,
 /// operator, matched GTFS trip id) onto a live trip. Implemented by `ovlive-gtfs`.
@@ -32,6 +37,9 @@ pub struct LiveState {
     /// Reverse index: vehicle key id -> current trip id. Identical here (id == key id),
     /// but kept explicit so the "new trip replaces old" rule reads clearly.
     stale_after: Duration,
+    /// Delay curves for trains, whose positions carry no punctuality. `None` disables the
+    /// lookup entirely, which is what tests and a train-less deployment want.
+    train_delays: Option<Arc<TrainDelays>>,
 }
 
 impl LiveState {
@@ -39,6 +47,42 @@ impl LiveState {
         Self {
             trips: DashMap::new(),
             stale_after: Duration::seconds(stale_after_secs),
+            train_delays: None,
+        }
+    }
+
+    /// Attach the RitInfo-derived delay curves consulted for train positions.
+    pub fn with_train_delays(mut self, delays: Arc<TrainDelays>) -> Self {
+        self.train_delays = Some(delays);
+        self
+    }
+
+    /// Fill in what the NS position feed can't: punctuality, and the operating day.
+    ///
+    /// Read on every position update rather than copied once, because a curve stays valid
+    /// while the train advances through it — the delay it reports changes with `now` even
+    /// when no new RitInfo has arrived.
+    fn apply_train_delay(&self, trip: &mut LiveTrip) {
+        if trip.key.dataowner != TRAIN_DATAOWNER {
+            return;
+        }
+        let Some(delays) = self.train_delays.as_ref() else { return };
+        let Some(number) = trip.journey_number.clone() else { return };
+        let Some(curve) = delays.get(&number) else { return };
+        if let Some(d) = curve.at(trip.last_update) {
+            trip.delay_seconds = d;
+            trip.delay_known = true;
+        }
+        // RitInfo knows the operating day outright; the position feed leaves us guessing it
+        // from the fix time, which is wrong for a train running past midnight.
+        if let Some(day) = curve.operating_day {
+            trip.operating_day = Some(day);
+        }
+        // The line code, but NOT `line_public_number`: enrichment is gated on that being
+        // None, so filling it here would stop GTFS ever attaching the headsign, route colours
+        // and matched trip. GTFS overwrites this with its own code once it matches.
+        if trip.line_planning_number.is_none() {
+            trip.line_planning_number = curve.line_code;
         }
     }
 
@@ -78,6 +122,7 @@ impl LiveState {
                 let mut trip = LiveTrip::new(ev.key.clone(), ev.timestamp);
                 trip.has_init = true;
                 apply_fields(&mut trip, &ev);
+                self.apply_train_delay(&mut trip);
                 enricher.enrich(&mut trip);
                 self.trips.insert(id.clone(), trip);
                 (id, false)
@@ -115,6 +160,7 @@ impl LiveState {
                     _ => {}
                 }
                 apply_fields(&mut entry, &ev);
+                self.apply_train_delay(&mut entry);
                 let needs_enrich = entry.line_public_number.is_none();
                 if needs_enrich {
                     enricher.enrich(&mut entry);
@@ -176,8 +222,16 @@ impl LiveState {
 }
 
 fn apply_fields(trip: &mut LiveTrip, ev: &PosEvent) {
-    if let (Some(x), Some(y)) = (ev.rd_x, ev.rd_y) {
-        let (lat, lon) = rd::rd_to_wgs84(x, y);
+    // WGS84 straight from the feed (NS InfoPlus) wins over Rijksdriehoek (KV6); converting
+    // RD is only worth doing when that's all we were given.
+    let fix = match (ev.lat, ev.lon) {
+        (Some(lat), Some(lon)) => Some((lat, lon)),
+        _ => match (ev.rd_x, ev.rd_y) {
+            (Some(x), Some(y)) => Some(rd::rd_to_wgs84(x, y)),
+            _ => None,
+        },
+    };
+    if let Some((lat, lon)) = fix {
         if trip.has_position() {
             let b = rd::bearing(trip.lat, trip.lon, lat, lon);
             // Keep old bearing if the vehicle barely moved (avoids jitter when stopped).
@@ -190,8 +244,20 @@ fn apply_fields(trip: &mut LiveTrip, ev: &PosEvent) {
         trip.lat = lat;
         trip.lon = lon;
     }
+    // A feed-supplied course beats anything derived from two fixes, and unlike the derived
+    // value it's still right when the vehicle has only ever reported one position. The NS
+    // feed omits it while stopped (see `parse_ns_treinposities`), so the old bearing holds.
+    if let Some(b) = ev.bearing {
+        trip.bearing = b;
+    }
+    if let Some(t) = ev.vehicle_type {
+        if trip.vehicle_type == crate::model::VehicleType::Unknown {
+            trip.vehicle_type = t;
+        }
+    }
     if let Some(p) = ev.punctuality {
         trip.delay_seconds = p;
+        trip.delay_known = true;
     }
     trip.last_kind = Some(ev.kind);
     if ev.line_planning_number.is_some() {
@@ -284,6 +350,10 @@ mod tests {
             block_code: Some("42".into()),
             rd_x: Some(x),
             rd_y: Some(y),
+            lat: None,
+            lon: None,
+            bearing: None,
+            vehicle_type: None,
             punctuality: Some(60),
             user_stop_code: Some("HAL1".into()),
             timestamp: Utc::now(),
@@ -354,6 +424,79 @@ mod tests {
         assert_eq!(t.realtime_trip_id(), None, "journey still missing");
         t.journey_number = Some("7".into());
         assert_eq!(t.realtime_trip_id().as_deref(), Some("RET:M1:7"));
+    }
+
+    /// A train's position carries no punctuality; it has to come from the RitInfo curve, and
+    /// must stay *unknown* rather than default to 0 when there's no curve for that train.
+    #[test]
+    fn train_delay_comes_from_the_ritinfo_curve() {
+        use crate::trains::{DelayPoint, TrainDelays, TrainUpdate};
+
+        let now = Utc::now();
+        let delays = Arc::new(TrainDelays::new());
+        delays.apply(
+            TrainUpdate {
+                number: "8743".into(),
+                operating_day: Some("2026-07-28".into()),
+                line_code: Some("SPR".into()),
+                points: vec![DelayPoint { at: now + Duration::minutes(5), delay_seconds: 180 }],
+            },
+            now,
+        );
+        let s = LiveState::new(240).with_train_delays(delays);
+
+        let train = |number: &str| PosEvent {
+            key: VehicleKey { dataowner: "IFF".into(), vehicle_number: number.into() },
+            kind: MessageKind::OnRoute,
+            line_planning_number: None,
+            journey_number: Some(number.into()),
+            operating_day: None,
+            block_code: None,
+            rd_x: None,
+            rd_y: None,
+            lat: Some(52.1),
+            lon: Some(4.6),
+            bearing: Some(90.0),
+            vehicle_type: Some(VehicleType::Train),
+            punctuality: None,
+            user_stop_code: None,
+            timestamp: now,
+        };
+
+        s.apply(train("8743"), &NoEnricher);
+        let t = s.get("IFF:8743").unwrap();
+        assert_eq!(t.delay_seconds, 180);
+        assert!(t.delay_known);
+        // RitInfo also supplies what the position feed omits.
+        assert_eq!(t.operating_day.as_deref(), Some("2026-07-28"));
+        assert_eq!(t.line_planning_number.as_deref(), Some("SPR"));
+        assert_eq!(t.vehicle_type, VehicleType::Train);
+        // WGS84 straight through, feed-supplied course kept.
+        assert_eq!((t.lat, t.lon), (52.1, 4.6));
+        assert_eq!(t.bearing, 90.0);
+
+        // No curve for this train: 0 would be a claim of punctuality we can't make.
+        s.apply(train("9999"), &NoEnricher);
+        let u = s.get("IFF:9999").unwrap();
+        assert_eq!(u.delay_seconds, 0);
+        assert!(!u.delay_known, "absence of data must not read as on time");
+    }
+
+    /// KV6 punctuality still marks the delay as known, so buses are unaffected.
+    #[test]
+    fn kv6_punctuality_marks_delay_known() {
+        let s = LiveState::new(240);
+        s.apply(ev(MessageKind::Init, "1", 120_700.0, 487_200.0), &NoEnricher);
+        let t = s.get("RET:1001").unwrap();
+        assert_eq!(t.delay_seconds, 60);
+        assert!(t.delay_known);
+
+        // A message without punctuality leaves it unknown rather than silently on time.
+        let mut e = ev(MessageKind::OnRoute, "1", 120_700.0, 487_200.0);
+        e.punctuality = None;
+        let s2 = LiveState::new(240);
+        s2.apply(e, &NoEnricher);
+        assert!(!s2.get("RET:1001").unwrap().delay_known);
     }
 
     #[test]

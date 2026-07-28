@@ -3,19 +3,24 @@ import {
   RestClient,
   type ConnStatus,
   type FilterState,
+  type StopDeparture,
+  type StopDeparturesResponse,
   type Vehicle,
   type VehicleDetail,
 } from "@ovlive/api-types";
 import { MapView, type MapHandle } from "../components/MapView";
 import { SettingsMenu } from "../components/SettingsMenu";
 import { FiltersPanel } from "../components/FiltersPanel";
+import { StopPanel } from "../components/StopPanel";
 import { VehiclePanel, type Selected } from "../components/VehiclePanel";
 import { DEFAULT_THEME, THEMES, type MapTheme } from "../lib/styles";
 import {
   API_BASE,
   getSavedMultiSelect,
+  getSavedShowStops,
   getSavedThemeId,
   setSavedMultiSelect,
+  setSavedShowStops,
   setSavedThemeId,
 } from "../lib/config";
 import { I18nProvider, useI18n } from "../lib/i18n";
@@ -54,6 +59,11 @@ function MapApp() {
   const [count, setCount] = useState(0);
   const [operators, setOperators] = useState<string[]>([]);
   const [multiSelect, setMultiSelect] = useState<boolean>(() => getSavedMultiSelect());
+  const [showStops, setShowStopsState] = useState<boolean>(() => getSavedShowStops());
+  const setShowStops = (on: boolean) => {
+    setShowStopsState(on);
+    setSavedShowStops(on);
+  };
 
   // Selection is an ordered list; `activeId` is the tab currently shown in the popup.
   const [selected, setSelected] = useState<Selected[]>([]);
@@ -66,6 +76,11 @@ function MapApp() {
   const [detailNonce, setDetailNonce] = useState(0);
   // Isolate mode: hide every non-selected vehicle on the map (client-side only).
   const [isolate, setIsolate] = useState(false);
+  // Stop whose departure board is open. It replaces the vehicle panel while open, leaving the
+  // vehicle selection (and its map highlight) untouched underneath.
+  const [stopId, setStopId] = useState<string | null>(null);
+  const [board, setBoard] = useState<StopDeparturesResponse | null>(null);
+  const [loadingBoard, setLoadingBoard] = useState(false);
 
   const rest = useMemo(() => new RestClient(API_BASE), []);
 
@@ -114,6 +129,31 @@ function MapApp() {
     };
   }, [activeId, rest, detailNonce]);
 
+  // Departure board for the open stop, polled so countdowns and live matches stay current.
+  // 12 s: the board's realtime content is the trip delay of the vehicles running it, which
+  // only moves on KV6 passages, so this is far below the useful resolution already.
+  useEffect(() => {
+    if (!stopId) {
+      setBoard(null);
+      return;
+    }
+    setBoard(null); // clear the previous stop's board rather than showing it under a new title
+    let alive = true;
+    setLoadingBoard(true);
+    const load = (initial: boolean) =>
+      rest
+        .stopDepartures(stopId)
+        .then((b) => alive && setBoard(b))
+        .catch(() => initial && alive && setBoard(null))
+        .finally(() => initial && alive && setLoadingBoard(false));
+    load(true);
+    const t = setInterval(() => load(false), 12_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [stopId, rest]);
+
   // Deep link: `?v=<id>` opens with that vehicle selected and followed (selectVehicle sets
   // following), isolated so only it shows, and centred (focusIdRef → the detail fetch flies
   // to it). Runs once on mount.
@@ -135,6 +175,7 @@ function MapApp() {
   }
 
   function selectVehicle(id: string, v: Vehicle | undefined) {
+    setStopId(null); // a vehicle selection takes the panel back from the departure board
     setFollowing(true);
     setActiveId(id);
     setSelected((prev) => {
@@ -142,6 +183,24 @@ function MapApp() {
       if (prev.some((s) => s.id === id)) return prev; // already selected → just activate
       return [...prev, { id, basic: v }].slice(-MAX_SELECTED);
     });
+  }
+
+  /** Open a stop's board. Stop following, or the followed vehicle would drag the camera off. */
+  function openStop(id: string) {
+    setFollowing(false);
+    setStopId(id);
+  }
+
+  /** A departure row was clicked: pan to the vehicle running it and select it. */
+  function openVehicleFromDeparture(d: StopDeparture) {
+    if (!d.vehicle_id) return;
+    if (d.vehicle_lat != null && d.vehicle_lon != null) {
+      mapRef.current?.panTo(d.vehicle_lon, d.vehicle_lat);
+    } else {
+      // No position on the board (shouldn't happen for a live row) — let the detail fetch pan.
+      focusIdRef.current = d.vehicle_id;
+    }
+    selectVehicle(d.vehicle_id, undefined);
   }
 
   // Live updates for the active vehicle (delay, position, at-stop) flow into its tab.
@@ -241,7 +300,10 @@ function MapApp() {
         selectedIds={selected.map((s) => s.id)}
         isolate={isolate}
         following={following}
+        showStops={showStops}
+        selectedStopId={stopId}
         routeShape={detail?.route_shape ?? null}
+        onSelectStop={openStop}
         onSelectVehicle={selectVehicle}
         onSelectedLive={onSelectedLive}
         onSelectedGone={onSelectedGone}
@@ -263,6 +325,8 @@ function MapApp() {
         <SettingsMenu
           value={theme}
           onChange={setTheme}
+          showStops={showStops}
+          onShowStopsChange={setShowStops}
           multiSelect={multiSelect}
           onMultiSelectChange={changeMultiSelect}
         />
@@ -273,7 +337,14 @@ function MapApp() {
 
       <FiltersPanel filters={filters} operators={operators} onChange={setFilters} onSearch={onSearch} />
 
-      {activeId && (
+      {stopId ? (
+        <StopPanel
+          board={board}
+          loading={loadingBoard}
+          onSelectVehicle={openVehicleFromDeparture}
+          onClose={() => setStopId(null)}
+        />
+      ) : activeId ? (
         <VehiclePanel
           selected={selected}
           activeId={activeId}
@@ -288,7 +359,7 @@ function MapApp() {
           onClose={closeAll}
           onResume={resumeTrip}
         />
-      )}
+      ) : null}
     </div>
   );
 }

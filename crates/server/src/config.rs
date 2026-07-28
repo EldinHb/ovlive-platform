@@ -21,6 +21,25 @@ pub struct Config {
     pub zmq_kv78_enabled: bool,
     pub zmq_kv78_endpoint: String,
     pub zmq_kv78_topics: Vec<String>,
+    /// NS InfoPlus train positions (`NStreinpositiesInterface5`). Trains are not in KV6 at
+    /// all, so this is the only source for them; disable with `ZMQ_NS_ENABLED=false` to skip
+    /// the extra SUB connection.
+    pub zmq_ns_enabled: bool,
+    pub zmq_ns_endpoint: String,
+    pub zmq_ns_topics: Vec<String>,
+    /// Reject NS GPS fixes older than this (seconds). The feed re-sends a full snapshot every
+    /// ~11 s and keeps stale fixes in it — some minutes old, a few *weeks* — so without a gate
+    /// those trains would appear and be pruned again on the next sweep. Keep it well under
+    /// `STALE_TRIP_SECS`.
+    pub ns_max_fix_age_secs: u64,
+    /// Consume the `RitInfo` envelope on the same InfoPlus connection to get train punctuality
+    /// (the position feed has none). `ZMQ_NS_RIT_ENABLED=false` leaves train delay unknown
+    /// rather than guessed.
+    pub zmq_ns_rit_enabled: bool,
+    /// Drop a train's delay curve if no revision has arrived within this window (seconds).
+    /// Curves are published well ahead of a run, so this is generously longer than the block
+    /// index's window.
+    pub train_delay_prune_secs: i64,
     /// Drop journeys from the block index not seen within this window (seconds). KV78Turbo
     /// only publishes a near-future horizon, so this bounds memory.
     pub block_prune_secs: i64,
@@ -58,6 +77,13 @@ impl Config {
     pub fn from_env() -> Self {
         let topics = env_or("ZMQ_KV6_TOPICS", "");
         let kv78_topics = env_or("ZMQ_KV78_TOPICS", "/GOVI/KV8passtimes/");
+        // Port 7664 carries ten InfoPlus envelopes; we take exactly the two we use — positions
+        // and the RitInfo punctuality curves — over one connection, leaving the rest off the
+        // socket entirely.
+        let ns_topics = env_or(
+            "ZMQ_NS_TOPICS",
+            "/RIG/NStreinpositiesInterface5,/RIG/InfoPlusRITInterface5",
+        );
         Config {
             bind_addr: env_or("BIND_ADDR", "0.0.0.0:8080"),
             database_url: env_or("DATABASE_URL", "postgres://ovlive:ovlive@localhost:5432/ovlive"),
@@ -83,6 +109,16 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            zmq_ns_enabled: env_parse("ZMQ_NS_ENABLED", true),
+            zmq_ns_endpoint: env_or("ZMQ_NS_ENDPOINT", "tcp://pubsub.besteffort.ndovloket.nl:7664"),
+            zmq_ns_topics: ns_topics
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            ns_max_fix_age_secs: env_parse("NS_MAX_FIX_AGE_SECS", 180),
+            zmq_ns_rit_enabled: env_parse("ZMQ_NS_RIT_ENABLED", true),
+            train_delay_prune_secs: env_parse("TRAIN_DELAY_PRUNE_SECS", 21_600),
             block_prune_secs: env_parse("BLOCK_PRUNE_SECS", 1800),
             zmq_idle_timeout_secs: env_parse("ZMQ_IDLE_TIMEOUT_SECS", 60),
 

@@ -93,6 +93,13 @@ impl Builder {
             block_code: self.block_code,
             rd_x: self.rd_x,
             rd_y: self.rd_y,
+            // KV6 positions are Rijksdriehoek metres and carry no course; both are converted
+            // and derived respectively when the event is applied.
+            lat: None,
+            lon: None,
+            bearing: None,
+            // Mode comes from the matched GTFS route, not the feed.
+            vehicle_type: None,
             punctuality: self.punctuality,
             user_stop_code: self.user_stop_code,
             timestamp: self.timestamp.unwrap_or_else(Utc::now),

@@ -13,7 +13,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 use ovlive_core::VehicleType;
 use zip::ZipArchive;
 
-use crate::model::{GtfsStore, RouteInfo, StopInfo, StopTime, TripInfo};
+use crate::model::{GtfsStore, RouteInfo, StopInfo, StopTime, TrainTrip, TripInfo};
 
 /// Parse HH:MM:SS (possibly >24h) into seconds since local midnight.
 fn parse_gtfs_time(s: &str) -> Option<i32> {
@@ -117,6 +117,8 @@ pub fn parse_reader<R: Read + Seek>(r: R) -> Result<GtfsStore> {
         }
         let block = get(hi, rec, "block_id");
         let shape = get(hi, rec, "shape_id");
+        // OVapi realtime join: realtime_trip_id = "<dataowner>:<line>:<journey>".
+        let rt = get(hi, rec, "realtime_trip_id");
         store.trips.insert(
             trip_id.clone(),
             TripInfo {
@@ -127,13 +129,30 @@ pub fn parse_reader<R: Read + Seek>(r: R) -> Result<GtfsStore> {
                 shape_id: (!shape.is_empty()).then_some(shape),
                 service_id: get(hi, rec, "service_id"),
                 long_name: get(hi, rec, "trip_long_name"),
+                realtime_trip_id: (!rt.is_empty()).then(|| rt.clone()),
             },
         );
-        // OVapi realtime join: realtime_trip_id = "<dataowner>:<line>:<journey>".
-        let rt = get(hi, rec, "realtime_trip_id");
-        if !rt.is_empty() {
-            store.trip_by_key.insert(rt, trip_id);
+        if rt.is_empty() {
+            return;
         }
+        // Rail also joins by bare train number, because that's all NS InfoPlus publishes.
+        // Keyed off the `IFF:` namespace and the rail route type — see `train_trips`.
+        if let Some(("IFF", rest)) = rt.split_once(':') {
+            let number = get(hi, rec, "trip_short_name");
+            let is_rail = store
+                .routes
+                .get(&store.trips[&trip_id].route_id)
+                .is_some_and(|r| r.vehicle_type == VehicleType::Train);
+            if !number.is_empty() && is_rail {
+                if let Some((line_code, _)) = rest.split_once(':') {
+                    store.train_trips.entry(number).or_default().push(TrainTrip {
+                        trip_id: trip_id.clone(),
+                        line_code: line_code.to_string(),
+                    });
+                }
+            }
+        }
+        store.trip_by_key.insert(rt, trip_id);
     })?;
 
     with_csv(&mut zip, "stops.txt", |hi, rec| {
@@ -418,5 +437,37 @@ mod tests {
         assert_eq!(t.service_id, "S1");
         assert_eq!(t.long_name, "Metro D naar Blaak");
         assert_eq!(store.trip_by_key.get("RET:M1:1001").map(String::as_str), Some("T1"));
+    }
+
+    /// Rail trips also get indexed by bare train number, because NS InfoPlus positions carry
+    /// nothing else. Rail-replacement buses reuse the number and must stay out of that index.
+    #[test]
+    fn indexes_rail_trips_by_train_number() {
+        let bytes = zip_of(&[
+            (
+                "routes.txt",
+                "route_id,agency_id,route_short_name,route_long_name,route_type\n\
+                 R1,IFF:NS,Sprinter,Hoorn <-> Gouda,2\n\
+                 R2,IFF:NS,Stopbus,Rail replacement,3\n",
+            ),
+            (
+                "trips.txt",
+                "trip_id,route_id,service_id,trip_headsign,trip_short_name,realtime_trip_id\n\
+                 T1,R1,S1,Gouda,8743,IFF:SPR:8743\n\
+                 T2,R1,S2,Gouda,8743,IFF:SPR:8743\n\
+                 TB,R2,S1,Gouda,8743,IFF:BST:8743\n\
+                 TX,R1,S1,Venlo,,IFF:IC:0\n",
+            ),
+        ]);
+        let store = parse_zip(&bytes).unwrap();
+
+        // Both operating patterns survive — `trip_by_key` collapses them, this must not.
+        let cands = store.train_trips.get("8743").expect("indexed by number");
+        assert_eq!(cands.len(), 2, "one per rail trip, bus replacement excluded: {cands:?}");
+        assert_eq!(cands[0].line_code, "SPR");
+        assert!(cands.iter().all(|c| c.trip_id != "TB"), "route_type 3 must not be a train");
+        assert_eq!(store.trip_by_key.get("IFF:BST:8743").map(String::as_str), Some("TB"));
+        // A rail trip with no train number can't be joined this way and isn't indexed.
+        assert!(!store.train_trips.values().flatten().any(|c| c.trip_id == "TX"));
     }
 }

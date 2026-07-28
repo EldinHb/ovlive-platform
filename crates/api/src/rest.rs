@@ -61,6 +61,9 @@ pub struct VehicleJson {
     pub lon: f64,
     pub bearing: Option<f32>,
     pub delay_seconds: i32,
+    /// Whether `delay_seconds` is a measurement. `false` means unknown, not on time — see the
+    /// train notes in the OpenAPI description.
+    pub delay_known: bool,
     pub destination: Option<String>,
     pub block_code: Option<String>,
     pub journey_number: Option<String>,
@@ -86,6 +89,7 @@ impl From<&LiveTrip> for VehicleJson {
             lon: t.lon,
             bearing: t.bearing.is_finite().then_some(t.bearing),
             delay_seconds: t.delay_seconds,
+            delay_known: t.delay_known,
             destination: t.destination.clone(),
             block_code: t.block_code.clone(),
             journey_number: t.journey_number.clone(),
@@ -192,6 +196,197 @@ pub async fn vehicle_detail(
         "route_shape": shape,
         "upcoming_stops": upcoming,
         "next_trip": next_trip,
+    }))
+    .into_response()
+}
+
+// ----------------------------------------------------------------------------
+// Stops (map layer)
+// ----------------------------------------------------------------------------
+
+/// Largest viewport, in square degrees, the stop layer will answer for. The whole country is
+/// ~6 deg², so this rejects country-wide requests: the layer is a zoomed-in detail (the web app
+/// only asks from zoom 14), and answering huge boxes would mean scanning most of the grid and
+/// serialising tens of thousands of quays on a public, keyless endpoint.
+const MAX_STOPS_BBOX_AREA: f64 = 1.0;
+const DEFAULT_STOPS_LIMIT: usize = 800;
+const MAX_STOPS_LIMIT: usize = 2_000;
+
+#[derive(Deserialize)]
+pub struct StopsQuery {
+    /// "minLon,minLat,maxLon,maxLat"
+    pub bbox: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct StopJson {
+    pub stop_id: String,
+    pub name: String,
+    /// `stops.txt.stop_code` — the operator's code. Not a GTFS key, and *not* comparable to
+    /// `VehicleJson::current_stop_id` for most operators (see CLAUDE.md).
+    pub code: Option<String>,
+    pub platform_code: Option<String>,
+    pub parent_station: Option<String>,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl From<&ovlive_gtfs::StopInfo> for StopJson {
+    fn from(s: &ovlive_gtfs::StopInfo) -> Self {
+        StopJson {
+            stop_id: s.stop_id.clone(),
+            name: s.name.clone(),
+            code: s.code.clone(),
+            platform_code: s.platform_code.clone(),
+            parent_station: s.parent_station.clone(),
+            lat: s.lat,
+            lon: s.lon,
+        }
+    }
+}
+
+/// GET /v1/stops/viewport — boardable quays inside a bbox, nearest the centre first.
+///
+/// This is the supported stops endpoint, feeding the web app's stop layer. It is deliberately
+/// *not* `/v1/stops`: that path belongs to the deprecated byte-compatible shim (camelCase keys,
+/// `neLat`/`swLon` params) and must keep its old shape until it is deleted. This path stays put
+/// afterwards — consumers are on it.
+pub async fn stops_in_viewport(
+    _auth: OptionalApiKeyUser,
+    State(state): State<AppState>,
+    Query(q): Query<StopsQuery>,
+) -> Response {
+    let Some(bbox) = q.bbox.as_deref().and_then(parse_bbox) else {
+        return err(StatusCode::BAD_REQUEST, "bbox is required as minLon,minLat,maxLon,maxLat");
+    };
+    let area = (bbox.max_lon - bbox.min_lon).abs() * (bbox.max_lat - bbox.min_lat).abs();
+    if !area.is_finite() || area > MAX_STOPS_BBOX_AREA {
+        return err(StatusCode::BAD_REQUEST, "bbox too large — zoom in");
+    }
+    let limit = q.limit.unwrap_or(DEFAULT_STOPS_LIMIT).clamp(1, MAX_STOPS_LIMIT);
+
+    // The stop grid lives in the day-scoped indexes, which are absent for the first few seconds
+    // after a cold boot (and while a feed swap rebuilds them).
+    let Some(idx) = state.gtfs.stop_indexes() else {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "stop index not built yet");
+    };
+    let stops: Vec<StopJson> = idx
+        .in_bbox(bbox.min_lat, bbox.min_lon, bbox.max_lat, bbox.max_lon, limit)
+        .into_iter()
+        .map(StopJson::from)
+        .collect();
+
+    // `truncated` tells a client its result is only the middle of the box, so it must not cache
+    // the response as covering the whole viewport.
+    let truncated = stops.len() >= limit;
+    Json(json!({ "count": stops.len(), "truncated": truncated, "stops": stops })).into_response()
+}
+
+// ----------------------------------------------------------------------------
+// Stop departure board
+// ----------------------------------------------------------------------------
+
+const DEFAULT_WINDOW_MIN: i32 = 90;
+const MAX_WINDOW_MIN: i32 = 360;
+const DEFAULT_DEPARTURES: usize = 25;
+const MAX_DEPARTURES: usize = 100;
+/// Keep a departure on the board for a minute after its time, so the vehicle pulling away
+/// right now doesn't vanish from under the reader's cursor.
+const DEPARTURE_GRACE_SECS: i32 = 60;
+
+#[derive(Deserialize)]
+pub struct DeparturesQuery {
+    /// Minutes ahead to look (default 90, max 360).
+    pub window: Option<i32>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct DepartureJson {
+    pub trip_id: String,
+    pub realtime_trip_id: Option<String>,
+    /// The live vehicle running this trip (`"<dataowner>:<vehicle_number>"`), when one is on
+    /// the road — this is the id to open in `/v1/vehicles/{id}`. `None` for a trip that has
+    /// not started reporting yet.
+    pub vehicle_id: Option<String>,
+    pub vehicle_lat: Option<f64>,
+    pub vehicle_lon: Option<f64>,
+    pub line: String,
+    pub vehicle_type: &'static str,
+    /// GTFS `agency_id` of the route (e.g. `GVB`), not the operational dataowner.
+    pub operator: Option<String>,
+    pub headsign: String,
+    pub stop_sequence: u32,
+    /// Seconds since **today's** local midnight — the same axis as `upcoming_stops`. May be
+    /// negative (yesterday's after-midnight service) or exceed 86400.
+    pub scheduled_arrival: i32,
+    pub scheduled_departure: i32,
+    /// `scheduled_departure` shifted by the live vehicle's *trip-level* delay, which is the
+    /// only realtime signal that joins here: BISON per-stop passages key on `UserStopCode`,
+    /// which does not map to gtfs-nl `stop_id` (see CLAUDE.md). Equal to
+    /// `scheduled_departure` while no vehicle is live.
+    pub expected_departure: i32,
+    pub delay_seconds: Option<i32>,
+    /// The live vehicle reports dwelling at a stop (not necessarily *this* stop — see above).
+    pub at_stop: bool,
+    pub line_color: Option<String>,
+    pub line_text_color: Option<String>,
+}
+
+/// GET /v1/stops/:stopId/departures — scheduled departures from a stop, enriched with the
+/// live vehicle running each trip where there is one.
+pub async fn stop_departures(
+    _auth: OptionalApiKeyUser,
+    State(state): State<AppState>,
+    Path(stop_id): Path<String>,
+    Query(q): Query<DeparturesQuery>,
+) -> Response {
+    let Some(idx) = state.gtfs.stop_indexes() else {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "stop index not built yet");
+    };
+    let Some(stop) = idx.store().stops.get(&stop_id) else {
+        return err(StatusCode::NOT_FOUND, "stop not found");
+    };
+    let window = q.window.unwrap_or(DEFAULT_WINDOW_MIN).clamp(1, MAX_WINDOW_MIN) * 60;
+    let limit = q.limit.unwrap_or(DEFAULT_DEPARTURES).clamp(1, MAX_DEPARTURES);
+
+    let now = chrono::Utc::now();
+    let from = ovlive_gtfs::secs_since_local_midnight(now, state.tz) - DEPARTURE_GRACE_SECS;
+    let live = state.latest_index();
+
+    let departures: Vec<DepartureJson> = idx
+        .departures(&stop_id, from, window + DEPARTURE_GRACE_SECS, limit)
+        .into_iter()
+        .map(|d| {
+            let vehicle = d.realtime_trip_id.and_then(|rt| live.get_by_realtime_trip_id(rt));
+            let delay = vehicle.filter(|v| v.delay_known).map(|v| v.delay_seconds);
+            DepartureJson {
+                trip_id: d.trip.trip_id.clone(),
+                realtime_trip_id: d.realtime_trip_id.map(str::to_string),
+                vehicle_id: vehicle.map(|v| v.id.clone()),
+                vehicle_lat: vehicle.map(|v| v.lat),
+                vehicle_lon: vehicle.map(|v| v.lon),
+                line: d.route.map(|r| r.short_name.clone()).unwrap_or_default(),
+                vehicle_type: type_str(d.route.map(|r| r.vehicle_type).unwrap_or(VehicleType::Unknown)),
+                operator: d.route.and_then(|r| r.agency_id.clone()),
+                headsign: d.trip.headsign.clone(),
+                stop_sequence: d.stop_sequence,
+                scheduled_arrival: d.scheduled_arrival,
+                scheduled_departure: d.scheduled_departure,
+                expected_departure: d.scheduled_departure + delay.unwrap_or(0),
+                delay_seconds: delay,
+                at_stop: vehicle.is_some_and(|v| v.at_stop),
+                line_color: d.route.and_then(|r| r.color.clone()),
+                line_text_color: d.route.and_then(|r| r.text_color.clone()),
+            }
+        })
+        .collect();
+
+    Json(json!({
+        "stop": StopJson::from(stop),
+        "service_date": idx.date().to_string(),
+        "departures": departures,
     }))
     .into_response()
 }

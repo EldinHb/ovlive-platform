@@ -57,6 +57,10 @@ impl VehicleKey {
 
 /// A normalized realtime position event produced by `ovlive-realtime` and applied to
 /// [`crate::state::LiveState`]. Decoupled from the XML wire format on purpose.
+///
+/// The two feeds fill this differently, which is why several fields are optional:
+/// BISON KV6 gives Rijksdriehoek metres and punctuality but no course; NS InfoPlus
+/// treinposities gives WGS84 degrees and a GPS course but no punctuality at all.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PosEvent {
     pub key: VehicleKey,
@@ -65,9 +69,19 @@ pub struct PosEvent {
     pub journey_number: Option<String>,
     pub operating_day: Option<String>,
     pub block_code: Option<String>,
-    /// Rijksdriehoek coordinates (metres); converted to lat/lon on apply.
+    /// Rijksdriehoek coordinates (metres); converted to lat/lon on apply. KV6 only.
     pub rd_x: Option<f64>,
     pub rd_y: Option<f64>,
+    /// WGS84 degrees, when the feed already reports them (NS InfoPlus). Takes precedence
+    /// over `rd_x`/`rd_y` on apply — no reason to round-trip through a projection.
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    /// Course over ground in degrees (0 = north), when the feed supplies one. KV6 doesn't,
+    /// so that path keeps deriving bearing from consecutive fixes.
+    pub bearing: Option<f32>,
+    /// Mode, when the feed itself identifies it (the NS feed is trains by definition).
+    /// Lets a vehicle render correctly even when GTFS enrichment finds no matching trip.
+    pub vehicle_type: Option<VehicleType>,
     /// Punctuality in seconds (+ late, - early).
     pub punctuality: Option<i32>,
     pub user_stop_code: Option<String>,
@@ -99,6 +113,13 @@ pub struct LiveTrip {
     pub lon: f64,
     pub bearing: f32,
     pub delay_seconds: i32,
+    /// Whether `delay_seconds` is a measurement or just its zero default.
+    ///
+    /// Needed because "unknown" and "on time" are both 0 on the wire, and conflating them
+    /// makes the UI assert punctuality it can't know. The NS position feed carries no
+    /// punctuality at all (it comes from RitInfo, separately and not for every train), and KV6
+    /// omits it on some message kinds too.
+    pub delay_known: bool,
     pub at_stop: bool,
     pub current_stop_id: Option<String>,
 
@@ -138,6 +159,7 @@ impl LiveTrip {
             lon: f64::NAN,
             bearing: f32::NAN,
             delay_seconds: 0,
+            delay_known: false,
             at_stop: false,
             current_stop_id: None,
             last_kind: None,

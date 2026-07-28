@@ -31,6 +31,7 @@ async fn main() {
             kind: StreamKind::Kv78Turbo,
             topics: vec!["/GOVI/KV8passtimes/".into()],
             idle_timeout: idle,
+            max_fix_age: idle, // unused by the BISON kinds
         },
         j_tx,
     ));
@@ -52,6 +53,7 @@ async fn main() {
             kind: StreamKind::Kv6,
             topics: vec![],
             idle_timeout: idle,
+            max_fix_age: idle, // unused by the BISON kinds
         },
         ev_tx,
     ));

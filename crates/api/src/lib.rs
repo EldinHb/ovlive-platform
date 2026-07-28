@@ -27,6 +27,11 @@ pub fn router(state: AppState) -> Router {
         // data
         .route("/v1/vehicles", get(rest::list_vehicles))
         .route("/v1/vehicles/:id", get(rest::vehicle_detail))
+        .route("/v1/stops/viewport", get(rest::stops_in_viewport))
+        // The path parameter must stay named `stopId`: matchit rejects two different parameter
+        // names at the same position, and the deprecated `/v1/stops/:stopId/stoptimes` sibling
+        // owns that name until it is deleted.
+        .route("/v1/stops/:stopId/departures", get(rest::stop_departures))
         .route("/v1/operators", get(rest::operators))
         .route("/v1/lines", get(rest::lines))
         .route("/v1/stream", get(ws::ws_handler))

@@ -7,8 +7,10 @@ pub mod filter;
 pub mod model;
 pub mod rd;
 pub mod state;
+pub mod trains;
 
 pub use blocks::{BlockSnapshot, BlockStore, JourneyUpdate, NextTrip};
 pub use filter::{BBox, Filters};
 pub use model::{LiveTrip, MessageKind, PosEvent, VehicleKey, VehicleType};
 pub use state::{Enricher, LiveState, NoEnricher, VehicleIndex};
+pub use trains::{DelayPoint, TrainDelay, TrainDelaySnapshot, TrainDelays, TrainUpdate};

@@ -5,6 +5,8 @@ import { useI18n, type Lang } from "../lib/i18n";
 interface Props {
   value: MapTheme;
   onChange: (t: MapTheme) => void;
+  showStops: boolean;
+  onShowStopsChange: (on: boolean) => void;
   multiSelect: boolean;
   onMultiSelectChange: (on: boolean) => void;
 }
@@ -15,7 +17,14 @@ const LANGS: { id: Lang; label: string }[] = [
 ];
 
 /** A gear button that opens a popover with map-theme options and app settings. */
-export function SettingsMenu({ value, onChange, multiSelect, onMultiSelectChange }: Props) {
+export function SettingsMenu({
+  value,
+  onChange,
+  showStops,
+  onShowStopsChange,
+  multiSelect,
+  onMultiSelectChange,
+}: Props) {
   const { t, lang, setLang } = useI18n();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -67,6 +76,22 @@ export function SettingsMenu({ value, onChange, multiSelect, onMultiSelectChange
               </button>
             ))}
           </div>
+
+          <div className="settings-title" style={{ marginTop: 10 }}>{t("settings.map")}</div>
+          <button
+            className="setting-toggle"
+            role="menuitemcheckbox"
+            aria-checked={showStops}
+            onClick={() => onShowStopsChange(!showStops)}
+          >
+            <span>
+              <span className="setting-label">{t("settings.stops")}</span>
+              <span className="setting-hint">{t("settings.stopsHint")}</span>
+            </span>
+            <span className={`switch ${showStops ? "on" : ""}`} aria-hidden>
+              <span className="knob" />
+            </span>
+          </button>
 
           <div className="settings-title" style={{ marginTop: 10 }}>{t("settings.selection")}</div>
           <button

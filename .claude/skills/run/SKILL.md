@@ -49,7 +49,9 @@ tail -15 /tmp/ovlive-server.log
 
 A healthy boot logs, in order: `GTFS feed loaded (routes=3195 trips=~1.04M …)` →
 `restored GTFS from parsed snapshot (no download)` → `stop indexes built for <today>` →
-`subscribed stream=KV78Turbo` / `stream=KV6` → `listening on http://0.0.0.0:8080`.
+`subscribed stream=KV78Turbo` / `stream=KV6` / `stream=NS InfoPlus` (the last with
+`topics=["/RIG/NStreinpositiesInterface5", "/RIG/InfoPlusRITInterface5"]`) →
+`listening on http://0.0.0.0:8080`.
 
 `restored N live trips (N pruned as stale)` is normal — snapshots older than
 `STALE_TRIP_SECS` are discarded and refill from the feed within a minute.
@@ -88,6 +90,20 @@ curl -s http://127.0.0.1:8080/health
 
 `live_vehicles` in the low thousands means the KV6 feed is flowing. Zero, a minute after
 boot, means the ZMQ subscription is not delivering.
+
+Trains ride a different feed, so check them separately — a few hundred nationally, ~98% of them
+enriched from GTFS:
+
+```bash
+curl -s 'http://127.0.0.1:8080/v1/vehicles?bbox=3.0,50.5,7.5,53.7&types=train' |
+  python3 -c 'import json,sys; v=json.load(sys.stdin)["vehicles"]; print(len(v), "trains,",
+  sum(1 for x in v if x["line_public_number"]), "enriched,",
+  sum(1 for x in v if x["delay_known"]), "with a known delay")'
+```
+
+`delay_known` climbs slowly from a cold start (RitInfo is published on change, not on a cycle —
+see CLAUDE.md); `train_delays.snap` is what keeps it warm across restarts. Trains with
+`delay_known: false` are correct behaviour, not a bug: their punctuality is genuinely unknown.
 
 REST — a bbox query around Amsterdam, and the docs (Scalar at `/docs`, spec at
 `/openapi.json`):
@@ -141,9 +157,11 @@ pkill -f 'react-router dev'
 ```
 
 **Fair use — this matters.** Exactly one ZMQ SUB connection per NDOV datastream per
-process. The server holds both (KV6 `:7658`, KV78 `:7817`), so **stop the server before
-running any sampler in `crates/realtime/examples/`** (`kv78listen`, `nextlinelive`) and
-never run two servers at once.
+process. The server holds all three (KV6 `:7658`, KV78 `:7817`, NS InfoPlus `:7664`), so
+**stop the server before running any sampler in `crates/realtime/examples/`**
+(`kv78listen`, `nextlinelive`, `nslisten`, `nsdelay`) and never run two servers at once.
+Note `:7664` counts as one datastream even though we subscribe to two envelopes on it — that
+is why positions and RitInfo share a single connection.
 
 To validate a GTFS parser change, use the cached zip — never re-fetch:
 
@@ -157,7 +175,9 @@ cargo run --release --example validate_feed -p ovlive-gtfs   # ~8 s, no network
 |---|---|
 | `password authentication failed` | Wrong Postgres port — use `docker port ovlive-pg 5432`, not `.env`'s 5432 |
 | Boot hangs past ~30 s, or logs a GTFS download | `data/gtfs.snap` gone; it falls back to parsing the cached zip (slow but correct) |
-| Boot re-parses after a code change | Bincode has no schema evolution — adding a field to `GtfsStore`/`LiveTrip` invalidates that snapshot. Self-healing, costs one full parse |
+| Boot re-parses after a code change | Bincode has no schema evolution — adding a field to `GtfsStore`/`LiveTrip` invalidates that snapshot. Self-healing, costs one full parse (~2 min in debug) |
+| No trains on the map | `ZMQ_NS_ENABLED=false`, or the `:7664` subscription isn't delivering — check the `stream=NS InfoPlus` line |
+| Every train says "on time" | `delay_known` is being ignored somewhere: unknown and on-time are both `delay_seconds: 0` |
 | `live_vehicles: 0` | ZMQ not delivering; check `subscribed stream=` lines and the idle watchdog (`ZMQ_IDLE_TIMEOUT_SECS`) |
 | SPA loads, map empty | Backend down or `VITE_API_BASE` wrong — check the browser's WS to `:8080/v1/stream` |
 | Vite on an unexpected port | 5173 taken by a stray dev server; read the port from the log |

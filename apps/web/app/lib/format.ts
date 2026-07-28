@@ -42,7 +42,11 @@ const OPERATORS: Record<string, OpDef> = {
   QBUZZ: { label: "QBUZZ", style: { bg: "#7A2E8E", fg: "#ffffff" } }, // Qbuzz — purple
   KEOLIS: { label: "KEOLIS", style: { bg: "#E6007E", fg: "#ffffff" }, aliases: ["KEOLIS NEDERLAND"] }, // Keolis — magenta
   UOV: { label: "U-OV", style: { bg: "#2E8B57", fg: "#ffffff" }, aliases: ["U-OV"] }, // U-OV (Utrecht) — green (approx.)
-  IFF: { label: "IFF", style: { bg: "#003082", fg: "#FFC917" }, aliases: ["NS", "NS INTERNATIONAL"] }, // NS / trains — blue + yellow
+  // Trains. `IFF` is the key because that's the vehicle-id namespace the train feed uses
+  // (gtfs-nl prefixes every rail realtime_trip_id with it), but the brand to *show* is NS —
+  // the only operator whose trains publish positions. Other rail concessions resolve by
+  // their GTFS agency name instead, so they keep their own colour.
+  IFF: { label: "NS", style: { bg: "#003082", fg: "#FFC917" }, aliases: ["NS", "NS INTERNATIONAL", "R-NET NS"] }, // NS — blue + yellow
   DELIJN: { label: "DELIJN", style: { bg: "#FFE600", fg: "#1d1d1f" }, aliases: ["DE LIJN"] }, // De Lijn (BE) — yellow
 };
 
@@ -131,8 +135,18 @@ export function typeIcon(t: VehicleType): string {
   return m[t] || "🚍";
 }
 
-/** Format a delay in seconds as "+2:30" / "−0:45" / "on time" (only exactly 0 is on time). */
-export function formatDelay(sec: number): { text: string; kind: "late" | "early" | "ontime" } {
+/**
+ * Format a delay as "+2:30" / "−0:45" / "on time" (only exactly 0 is on time).
+ *
+ * Pass `known = false` when the feed hasn't told us: trains get punctuality from a separate
+ * InfoPlus feed that doesn't cover every train, and rendering that gap as "on time" asserts
+ * something we don't know.
+ */
+export function formatDelay(
+  sec: number,
+  known = true,
+): { text: string; kind: "late" | "early" | "ontime" | "unknown" } {
+  if (!known) return { text: "no delay data", kind: "unknown" };
   if (sec === 0) return { text: "on time", kind: "ontime" };
   const late = sec > 0;
   const a = Math.abs(sec);

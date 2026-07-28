@@ -217,6 +217,9 @@ button { font-family: inherit; cursor: pointer; }
 .delay-late { background: rgba(255,59,48,.15); color: var(--late); }
 .delay-early { background: rgba(0,122,255,.15); color: var(--early); }
 .delay-ontime { background: rgba(52,199,89,.15); color: var(--ontime); }
+/* Unknown punctuality reads as neutral/muted — deliberately not the green "on time" pill,
+   which would assert what we don't know (see formatDelay). */
+.delay-unknown { background: rgba(127,140,152,.15); color: var(--text-dim); }
 /* Predicted next line (block/omloop chaining) — sits above the upcoming-stops list. */
 .next-trip {
   margin: 0 0 18px; padding: 12px 14px; border-radius: 12px;
@@ -273,6 +276,47 @@ button { font-family: inherit; cursor: pointer; }
   align-self: flex-start; font-size: 11px; font-weight: 600; color: var(--ontime);
   background: rgba(52, 199, 89, 0.14); padding: 1px 7px; border-radius: 999px;
 }
+
+/* Section heading inside a panel body (upcoming stops, departures). */
+.section-title {
+  margin: 0 0 10px; font-size: 13px; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+
+/* --- Stop departure board --- */
+.stop-head { display: flex; align-items: flex-start; gap: 12px; padding-right: 34px; }
+.stop-pin { color: var(--accent); font-size: 20px; line-height: 1.2; flex: none; }
+.stop-head-text { min-width: 0; }
+.stop-title {
+  display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 600;
+  letter-spacing: -0.02em; overflow-wrap: anywhere;
+}
+.stop-platform {
+  flex: none; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text-dim);
+}
+.deps { list-style: none; margin: 0; padding: 0; }
+.dep { border-bottom: 1px solid var(--border); }
+.dep:last-child { border-bottom: 0; }
+/* A live row is a button (it opens the vehicle); a schedule-only row is inert. Both keep the
+   same grid so the two kinds line up in one column. */
+.dep-btn, .dep.static {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 10px 0;
+  border: 0; background: transparent; color: var(--text); text-align: left; font: inherit;
+}
+.dep-btn { border-radius: 10px; padding: 10px 6px; margin: 0 -6px; transition: background .15s; }
+.dep-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dep-line {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 28px; padding: 0 8px; border-radius: 8px;
+  font-weight: 700; font-size: 14px; line-height: 1; white-space: nowrap;
+}
+.dep-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dep-dest { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-sub { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+.dep-delay { padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+.dep-chevron { flex: none; color: var(--text-dim); font-size: 18px; }
+.stop-foot { margin-top: 14px; }
 
 .icon-close { position: absolute; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
 .link-btn { display: inline-block; margin-top: 6px; color: var(--accent); font-size: 14px; text-decoration: none; font-weight: 500; }

@@ -1,19 +1,23 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import {
   LiveClient,
+  RestClient,
   type BBox,
   type ConnStatus,
   type FilterState,
+  type StopSummary,
   type Vehicle,
 } from "@ovlive/api-types";
-import type { MapTheme } from "../lib/styles";
-import { resolveOperator, type OpStyle } from "../lib/format";
-import { DEFAULT_ZOOM, NL_CENTER, getSavedView, setSavedView } from "../lib/config";
+import { markerPalette, type MapTheme, type MarkerPalette } from "../lib/styles";
+import { resolveOperator } from "../lib/format";
+import { API_BASE, DEFAULT_ZOOM, NL_CENTER, getSavedView, setSavedView } from "../lib/config";
 
 export interface MapHandle {
   locate: () => void;
   flyTo: (lon: number, lat: number, zoom?: number) => void;
+  /** Recentre on a point at the current zoom, clear of whichever panel is open. */
+  panTo: (lon: number, lat: number) => void;
 }
 
 interface Props {
@@ -23,7 +27,12 @@ interface Props {
   selectedIds: string[];
   isolate: boolean;
   following: boolean;
+  /** Draw the GTFS stop layer (only visible from STOPS_ZOOM); off hides it entirely. */
+  showStops: boolean;
+  /** Stop whose departure board is open — highlighted on the map. */
+  selectedStopId: string | null;
   routeShape: [number, number][] | null;
+  onSelectStop: (stopId: string) => void;
   onSelectVehicle: (id: string, v: Vehicle | undefined) => void;
   onSelectedLive: (v: Vehicle) => void;
   /** A selected vehicle left the live stream (its trip ended / was pruned). */
@@ -36,8 +45,19 @@ interface Props {
 }
 
 const GLYPHS = "https://tiles.versatiles.org/assets/glyphs/{fontstack}/{range}.pbf";
+// Fontstack served by GLYPHS — and by the remote VersaTiles styles, which use the same
+// endpoint, so one name works on every theme.
+const LABEL_FONT = ["noto_sans_regular"];
 // Zoom at which markers switch from a coloured dot to the boxed operator+line pill.
 const LOGO_ZOOM = 11;
+
+// Stops only appear once the viewport is small enough for them to be legible (and for the
+// bbox query to stay cheap — the server rejects boxes over 1 deg²). Names come in later still.
+const STOPS_ZOOM = 14;
+const STOP_LABEL_ZOOM = 15.5;
+const STOPS_LIMIT = 800;
+// Fetch a box 35% larger than the view on each side, so small pans need no new request.
+const STOPS_PAD = 0.35;
 
 function boundsToBBox(map: maplibregl.Map): BBox {
   const b = map.getBounds();
@@ -47,6 +67,28 @@ function boundsToBBox(map: maplibregl.Map): BBox {
     maxLat: b.getNorth(),
     maxLon: b.getEast(),
   };
+}
+
+function padBBox(b: BBox, f: number): BBox {
+  const dLat = (b.maxLat - b.minLat) * f;
+  const dLon = (b.maxLon - b.minLon) * f;
+  return {
+    minLat: b.minLat - dLat,
+    minLon: b.minLon - dLon,
+    maxLat: b.maxLat + dLat,
+    maxLon: b.maxLon + dLon,
+  };
+}
+
+/** Is `view` fully inside the already-fetched box `have`? */
+function covers(have: BBox | null, view: BBox): boolean {
+  return (
+    !!have &&
+    have.minLat <= view.minLat &&
+    have.minLon <= view.minLon &&
+    have.maxLat >= view.maxLat &&
+    have.maxLon >= view.maxLon
+  );
 }
 
 export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref) {
@@ -59,6 +101,11 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
   const rafRef = useRef<number>();
   const meMarkerRef = useRef<maplibregl.Marker>();
   const hoveredRef = useRef<string | null>(null);
+  // Stop layer: the last fetched features, the box they cover, and the in-flight request.
+  const stopsRef = useRef<GeoJSON.FeatureCollection>(emptyFC());
+  const stopsBoxRef = useRef<BBox | null>(null);
+  const stopsAbortRef = useRef<AbortController>();
+  const rest = useMemo(() => new RestClient(API_BASE), []);
   // Always-current copies for use inside stable map event handlers.
   const filtersRef = useRef(props.filters);
   filtersRef.current = props.filters;
@@ -70,6 +117,14 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
   isolateRef.current = props.isolate;
   const followingRef = useRef(props.following);
   followingRef.current = props.following;
+  const showStopsRef = useRef(props.showStops);
+  showStopsRef.current = props.showStops;
+  const selectedStopRef = useRef(props.selectedStopId);
+  selectedStopRef.current = props.selectedStopId;
+  const onSelectStopRef = useRef(props.onSelectStop);
+  onSelectStopRef.current = props.onSelectStop;
+  const themeRef = useRef(props.theme);
+  themeRef.current = props.theme;
   const routeShapeRef = useRef(props.routeShape);
   routeShapeRef.current = props.routeShape;
   const onDetachRef = useRef(props.onDetach);
@@ -100,10 +155,16 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     flyTo(lon, lat, zoom) {
       mapRef.current?.flyTo({ center: [lon, lat], zoom: zoom ?? 15 });
     },
+    panTo(lon, lat) {
+      const map = mapRef.current;
+      if (map) map.easeTo({ center: [lon, lat], offset: panelAwareOffset(map), duration: 600 });
+    },
   }));
 
-  // Build the (empty) vehicle + route layers. Re-run after every style load.
+  // Build the (empty) stop + vehicle + route layers. Re-run after every style load.
+  // Stops go in first so vehicles always draw on top of them.
   function ensureLayers(map: maplibregl.Map) {
+    ensureStopLayers(map);
     if (!map.getSource("vehicles")) {
       map.addSource("vehicles", { type: "geojson", data: emptyFC() });
     }
@@ -132,8 +193,10 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
         },
       });
     }
-    // Low zoom (below LOGO_ZOOM): a coloured dot in the operator's brand colour.
+    // Low zoom (below LOGO_ZOOM): a neutral dot, the same for every vehicle, tinted to the
+    // theme (see markerPalette).
     if (!map.getLayer("veh-dot")) {
+      const pal = markerPalette(themeRef.current.dark);
       map.addLayer({
         id: "veh-dot",
         type: "circle",
@@ -142,17 +205,24 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
         paint: {
           // Stops must be ascending in zoom; keep radius growing up to the pill threshold.
           "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 3, LOGO_ZOOM, 8],
-          "circle-color": ["get", "color"] as any,
-          "circle-stroke-color": "#ffffff",
+          "circle-color": pal.bg,
+          // The pill's translucent border, scaled down to a few pixels, leaves the dot looking
+          // washed out — a dot gets the full-strength text tone as its ring instead.
+          "circle-stroke-color": pal.fg,
           "circle-stroke-width": 1.5,
           "circle-opacity": 0.96,
         },
       });
+    } else {
+      // The layer outlived the style swap — re-tint it in place.
+      const pal = markerPalette(themeRef.current.dark);
+      map.setPaintProperty("veh-dot", "circle-color", pal.bg);
+      map.setPaintProperty("veh-dot", "circle-stroke-color", pal.fg);
     }
     // (No plain-text label layer: line numbers only ever appear inside a boxed pill.)
 
-    // High zoom: one baked pill image per (operator, line) — operator code + line number
-    // in a single brand-coloured box. Baking the text into the icon (rather than a separate
+    // High zoom: one baked pill image per (operator, line, theme tone) — operator code + line
+    // number in a single neutral box. Baking the text into the icon (rather than a separate
     // text layer) means overlapping markers stack as whole units instead of their text
     // bleeding across neighbouring boxes.
     if (!map.getLayer("veh-badge")) {
@@ -210,6 +280,118 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     applyIsolation(map);
   }
 
+  // --- Stop layer ---
+  // Stops are static (they change only when the daily GTFS feed swaps), so they come from a
+  // plain REST bbox query rather than the live stream, and are re-fetched only when the user
+  // pans outside the padded box already loaded.
+  function ensureStopLayers(map: maplibregl.Map) {
+    const dark = themeRef.current.dark;
+    if (!map.getSource("stops")) {
+      map.addSource("stops", { type: "geojson", data: stopsRef.current });
+    }
+    // Halo behind the stop whose board is open, so the panel and the map agree on which of
+    // several quays sharing a name is being shown.
+    if (!map.getLayer("stops-selected")) {
+      map.addLayer({
+        id: "stops-selected",
+        type: "circle",
+        source: "stops",
+        minzoom: STOPS_ZOOM,
+        // Set immediately after, from the ref — this closure may predate the current selection.
+        filter: ["==", ["get", "stopId"], "__none__"],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], STOPS_ZOOM, 8, 17, 13],
+          "circle-color": "#0071e3",
+          "circle-opacity": 0.28,
+        },
+      });
+    }
+    if (!map.getLayer("stops-dot")) {
+      map.addLayer({
+        id: "stops-dot",
+        type: "circle",
+        source: "stops",
+        minzoom: STOPS_ZOOM,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], STOPS_ZOOM, 2.5, 17, 5],
+          // A hollow ring, so a stop never reads as a (solid) vehicle dot.
+          "circle-color": dark ? "#12161b" : "#ffffff",
+          "circle-stroke-color": dark ? "#9aa3ad" : "#4a5561",
+          "circle-stroke-width": 1.4,
+        },
+      });
+    }
+    if (!map.getLayer("stops-label")) {
+      map.addLayer({
+        id: "stops-label",
+        type: "symbol",
+        source: "stops",
+        minzoom: STOP_LABEL_ZOOM,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": LABEL_FONT,
+          "text-size": 11,
+          "text-anchor": "left",
+          "text-offset": [0.6, 0],
+          "text-max-width": 12,
+          // Default collision handling applies: where stops crowd together the surplus labels
+          // are simply not placed, while every dot stays drawn (dots are their own layer).
+          "text-padding": 3,
+        },
+        paint: {
+          "text-color": dark ? "#e6e9ee" : "#2b3038",
+          "text-halo-color": dark ? "rgba(0,0,0,.75)" : "rgba(255,255,255,.9)",
+          "text-halo-width": 1.2,
+        },
+      });
+    }
+    applyStopsVisibility(map);
+    applyStopSelection(map);
+  }
+
+  function applyStopsVisibility(map: maplibregl.Map) {
+    const vis = showStopsRef.current ? "visible" : "none";
+    for (const layer of ["stops-selected", "stops-dot", "stops-label"]) {
+      if (map.getLayer(layer)) map.setLayoutProperty(layer, "visibility", vis);
+    }
+  }
+
+  function applyStopSelection(map: maplibregl.Map) {
+    if (map.getLayer("stops-selected")) {
+      map.setFilter("stops-selected", ["==", ["get", "stopId"], selectedStopRef.current ?? "__none__"]);
+    }
+  }
+
+  function pushStops(map: maplibregl.Map) {
+    const src = map.getSource("stops") as maplibregl.GeoJSONSource | undefined;
+    src?.setData(stopsRef.current);
+  }
+
+  async function loadStops(map: maplibregl.Map) {
+    if (!showStopsRef.current || map.getZoom() < STOPS_ZOOM) return;
+    const view = boundsToBBox(map);
+    if (covers(stopsBoxRef.current, view)) return;
+
+    stopsAbortRef.current?.abort();
+    const ac = new AbortController();
+    stopsAbortRef.current = ac;
+    const box = padBBox(view, STOPS_PAD);
+    try {
+      const res = await rest.stopsInViewport(box, STOPS_LIMIT, ac.signal);
+      stopsRef.current = {
+        type: "FeatureCollection",
+        features: res.stops.map(stopFeature),
+      };
+      // A truncated result holds only the stops nearest the centre, so it cannot be treated
+      // as covering the box — leave the coverage unset and re-ask on the next move.
+      stopsBoxRef.current = res.truncated ? null : box;
+      pushStops(map);
+    } catch {
+      // Aborted by a newer request, offline, or the index isn't built yet (503 right after a
+      // server restart): keep whatever is drawn and try again on the next move.
+    }
+  }
+
   // Isolate mode: hide every non-selected vehicle by filtering the base marker layers
   // down to the selected ids. Purely a GPU-side layer filter — no per-frame JS, so it
   // costs nothing on the hot path. The selection/hover overlays draw the selected
@@ -228,21 +410,36 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
   function pushData(map: maplibregl.Map) {
     const src = map.getSource("vehicles") as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
-    ensureMarkerImages(map, featuresRef.current.values());
-    ensureSelectedImages(map, selectedIdsRef.current);
+    const pal = markerPalette(themeRef.current.dark);
+    ensureMarkerImages(map, featuresRef.current.values(), pal);
+    ensureSelectedImages(map, selectedIdsRef.current, pal);
     src.setData(fc());
   }
   // Bake the outlined variant for the currently-selected marker(s), on demand.
-  function ensureSelectedImages(map: maplibregl.Map, ids: string[]) {
+  function ensureSelectedImages(map: maplibregl.Map, ids: string[], pal: MarkerPalette) {
     for (const id of ids) {
       const f = featuresRef.current.get(id);
       const p = f?.properties as any;
       if (p?.iconSel && !map.hasImage(p.iconSel)) {
-        const style: OpStyle = { bg: p.color ?? "#5b6470", fg: p.fg ?? "#ffffff" };
-        map.addImage(p.iconSel, makeMarker(p.owner ?? "", p.line ?? "", style, SELECT_OUTLINE), {
+        map.addImage(p.iconSel, makeMarker(p.owner ?? "", p.line ?? "", pal, SELECT_OUTLINE), {
           pixelRatio: MARKER_DPR,
         });
       }
+    }
+  }
+
+  /**
+   * Re-point every marker feature at the icon variant for the current theme. Marker images are
+   * baked per theme tone and keyed by it, so a light↔dark switch has to rewrite the feature's
+   * icon name — the images themselves are then baked lazily by pushData.
+   */
+  function retintMarkers() {
+    const dark = themeRef.current.dark;
+    for (const f of featuresRef.current.values()) {
+      const p = f.properties as any;
+      const icon = markerId(p.owner ?? "", p.line ?? "", dark);
+      p.icon = icon;
+      p.iconSel = `${icon}|sel`;
     }
   }
   function pushRoute(map: maplibregl.Map) {
@@ -319,7 +516,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
           }
           for (const v of u.entered) {
             vehiclesRef.current.set(v.id, v);
-            featuresRef.current.set(v.id, vehicleFeature(v));
+            featuresRef.current.set(v.id, vehicleFeature(v, themeRef.current.dark));
             if (selectedIdsRef.current.includes(v.id)) onSelectedBackRef.current(v);
           }
           for (const m of u.moved) {
@@ -327,10 +524,18 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
             if (f && f.geometry.type === "Point") {
               f.geometry.coordinates = [m.lon, m.lat];
               (f.properties as any).delay = m.delay;
+              (f.properties as any).delayKnown = m.delayKnown;
               (f.properties as any).bearing = m.bearing ?? 0;
             }
             const veh = vehiclesRef.current.get(m.id);
-            if (veh) Object.assign(veh, { lat: m.lat, lon: m.lon, delay: m.delay, atStop: m.atStop });
+            if (veh)
+              Object.assign(veh, {
+                lat: m.lat,
+                lon: m.lon,
+                delay: m.delay,
+                delayKnown: m.delayKnown,
+                atStop: m.atStop,
+              });
           }
           for (const id of u.left) {
             featuresRef.current.delete(id);
@@ -357,6 +562,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
       clientRef.current?.update(boundsToBBox(map), Math.round(map.getZoom()), filtersRef.current);
       const c = map.getCenter();
       setSavedView({ lng: c.lng, lat: c.lat, zoom: map.getZoom() });
+      void loadStops(map);
     };
     map.on("moveend", resync);
     map.on("resize", resync);
@@ -372,6 +578,27 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     };
     for (const layer of ["veh-dot", "veh-badge", "veh-badge-hover"]) {
       map.on("click", layer, onPick);
+      map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
+      map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
+    }
+
+    // Click a stop → open its departure board. Vehicle markers draw above the stop layer, so
+    // a marker sitting on top of a stop must win the click rather than firing both handlers.
+    const VEHICLE_LAYERS = ["veh-dot", "veh-badge", "veh-badge-hover", "veh-badge-selected"];
+    const onPickStop = (e: maplibregl.MapLayerMouseEvent) => {
+      const f = e.features?.[0];
+      const id = f?.properties?.stopId as string | undefined;
+      if (!id) return;
+      const layers = VEHICLE_LAYERS.filter((l) => map.getLayer(l));
+      if (map.queryRenderedFeatures(e.point, { layers }).length > 0) return;
+      if (f?.geometry.type === "Point") {
+        const [lon, lat] = f.geometry.coordinates as [number, number];
+        map.easeTo({ center: [lon, lat], offset: panelAwareOffset(map), duration: 400 });
+      }
+      onSelectStopRef.current(id);
+    };
+    for (const layer of ["stops-dot", "stops-label"]) {
+      map.on("click", layer, onPickStop);
       map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
       map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
     }
@@ -395,20 +622,44 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
 
     return () => {
       clientRef.current?.close();
+      stopsAbortRef.current?.abort();
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       map.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Theme change → swap style, then re-add layers + data.
+  // Theme change → swap style, then re-add layers + data. Markers are tinted to the theme, so
+  // they have to be re-keyed onto the new tone's icon variant before the layers come back.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    map.setStyle(withGlyphs(props.theme.style));
-    map.once("styledata", () => ensureLayers(map));
+    retintMarkers();
+    // `diff: false` forces a full style reload, and with it exactly one "style.load" — the only
+    // signal that reliably means "the new style is now current, add your layers to it".
+    // Diffing (the default) removes our sources and layers, because they are in the outgoing
+    // style and in no incoming one, and then fires neither "style.load" nor a usable
+    // "styledata" — leaving a fresh basemap with no vehicles, stops or route until a reload.
+    map.setStyle(withGlyphs(props.theme.style), { diff: false });
+    map.once("style.load", () => ensureLayers(map));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.theme.id]);
+
+  // Stops toggled: hide/show the layers (the data stays cached), and fill them on first use.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    applyStopsVisibility(map);
+    if (props.showStops) void loadStops(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.showStops]);
+
+  // Highlight the stop whose board is open.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) applyStopSelection(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.selectedStopId]);
 
   // Filters change → tell the server.
   useEffect(() => {
@@ -425,7 +676,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     const filter = ["in", ["get", "id"], ["literal", props.selectedIds]] as any;
     if (map.getLayer("veh-selected")) map.setFilter("veh-selected", filter);
     if (map.getLayer("veh-badge-selected")) {
-      ensureSelectedImages(map, props.selectedIds);
+      ensureSelectedImages(map, props.selectedIds, markerPalette(props.theme.dark));
       map.setFilter("veh-badge-selected", filter);
     }
     applyIsolation(map);
@@ -488,23 +739,17 @@ function emptyFC(): GeoJSON.FeatureCollection {
   return { type: "FeatureCollection", features: [] };
 }
 
-function markerId(owner: string, line: string, color: string): string {
-  return `m|${owner}|${line || ""}|${color}`;
+/** Icon key: the pill's content plus the theme tone it was baked for. */
+function markerId(owner: string, line: string, dark: boolean): string {
+  return `m|${owner}|${line || ""}|${dark ? "d" : "l"}`;
 }
 
-/** A GTFS 6-hex colour (no '#') → CSS hex; "" / undefined → null. */
-function hex(c: string | undefined | null): string | null {
-  return c ? `#${c}` : null;
-}
-
-function vehicleFeature(v: Vehicle): GeoJSON.Feature {
+function vehicleFeature(v: Vehicle, dark: boolean): GeoJSON.Feature {
   // Resolve the operator to display (GTFS brand over the raw dataowner code) so the
   // marker/dot show the public operator, not a masking subcontractor code.
   const op = resolveOperator(v.dataowner, v.operator);
-  // Prefer the line's official GTFS colour; fall back to the operator's brand colour.
-  const bg = hex(v.lineColor) ?? op.style.bg;
-  const fg = hex(v.lineTextColor) ?? op.style.fg;
-  const icon = markerId(op.key, v.line, bg);
+  // No brand colour here: line/operator colours are for the panels, markers are uniform.
+  const icon = markerId(op.label, v.line, dark);
   return {
     type: "Feature",
     geometry: { type: "Point", coordinates: [v.lon, v.lat] },
@@ -512,14 +757,28 @@ function vehicleFeature(v: Vehicle): GeoJSON.Feature {
       id: v.id,
       line: v.line,
       owner: op.label,
-      color: bg,
-      fg,
       type: v.type,
       delay: v.delay,
+      delayKnown: v.delayKnown,
       bearing: v.bearing ?? 0,
       icon,
       iconSel: `${icon}|sel`,
     },
+  };
+}
+
+function stopFeature(s: StopSummary): GeoJSON.Feature {
+  // gtfs-nl names stops "<place>, <stop>" ("Amsterdam, Rokin"). At the zoom where labels
+  // appear the place is obvious from the basemap, and repeating it on every dot wraps most
+  // labels onto two lines — so drop it. Station names carry no comma and are left alone.
+  const short = s.name.replace(/^[^,]+,\s*/, "");
+  // Big interchanges have many quays sharing one name; the platform code is what actually
+  // distinguishes them, when the feed has one.
+  const name = s.platform_code ? `${short} ${s.platform_code}` : short;
+  return {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+    properties: { stopId: s.stop_id, name },
   };
 }
 
@@ -534,12 +793,12 @@ const MARKER_DPR = typeof window !== "undefined" ? Math.min(window.devicePixelRa
 const SELECT_OUTLINE = "#0071e3";
 
 /**
- * Bake a whole marker into one image: a brand-coloured rounded pill with the operator
- * code (dimmed) and the line number (bold) side by side. Because the text lives inside
- * the icon, overlapping markers stack cleanly instead of their labels bleeding together.
- * When `outline` is set, an accent ring is drawn hugging the pill (the selected variant).
+ * Bake a whole marker into one image: a neutral rounded pill with the operator code (dimmed)
+ * and the line number (bold) side by side. Because the text lives inside the icon, overlapping
+ * markers stack cleanly instead of their labels bleeding together. When `outline` is set, an
+ * accent ring is drawn hugging the pill (the selected variant).
  */
-function makeMarker(owner: string, line: string, style: OpStyle, outline?: string): ImageData {
+function makeMarker(owner: string, line: string, pal: MarkerPalette, outline?: string): ImageData {
   const dpr = MARKER_DPR;
   const fontOwner = `600 11px -apple-system, system-ui, "Segoe UI", sans-serif`;
   const fontLine = `700 13px -apple-system, system-ui, "Segoe UI", sans-serif`;
@@ -565,14 +824,13 @@ function makeMarker(owner: string, line: string, style: OpStyle, outline?: strin
 
   ctx.beginPath();
   ctx.roundRect(0.5, 0.5, W - 1, H - 1, R);
-  ctx.fillStyle = style.bg;
+  ctx.fillStyle = pal.bg;
   ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.strokeStyle = pal.stroke;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Selection ring, just outside the pill's white border (its own white stroke keeps it
-  // legible against any pill colour).
+  // Selection ring, just outside the pill's border.
   if (outline) {
     ctx.beginPath();
     ctx.roundRect(-1.5, -1.5, W + 3, H + 3, R + 1.5);
@@ -587,14 +845,14 @@ function makeMarker(owner: string, line: string, style: OpStyle, outline?: strin
   if (owner) {
     ctx.globalAlpha = 0.8;
     ctx.font = fontOwner;
-    ctx.fillStyle = style.fg;
+    ctx.fillStyle = pal.fg;
     ctx.fillText(owner, x, H / 2 + 0.5);
     x += wOwner + gap;
     ctx.globalAlpha = 1;
   }
   if (line) {
     ctx.font = fontLine;
-    ctx.fillStyle = style.fg;
+    ctx.fillStyle = pal.fg;
     ctx.fillText(line, x, H / 2 + 0.5);
   }
 
@@ -602,12 +860,15 @@ function makeMarker(owner: string, line: string, style: OpStyle, outline?: strin
 }
 
 /** Lazily create any marker images referenced by the given features (idempotent). */
-function ensureMarkerImages(map: maplibregl.Map, features: Iterable<GeoJSON.Feature>) {
+function ensureMarkerImages(
+  map: maplibregl.Map,
+  features: Iterable<GeoJSON.Feature>,
+  pal: MarkerPalette,
+) {
   for (const f of features) {
     const p = f.properties as any;
     if (p?.icon && !map.hasImage(p.icon)) {
-      const style: OpStyle = { bg: p.color ?? "#5b6470", fg: p.fg ?? "#ffffff" };
-      map.addImage(p.icon, makeMarker(p.owner ?? "", p.line ?? "", style), {
+      map.addImage(p.icon, makeMarker(p.owner ?? "", p.line ?? "", pal), {
         pixelRatio: MARKER_DPR,
       });
     }
