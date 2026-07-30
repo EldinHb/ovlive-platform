@@ -1,14 +1,23 @@
 # Production stack: pulls published images, builds nothing.
 #
-#   IMAGE_PREFIX=ghcr.io/my-org IMAGE_TAG=latest docker compose -f docker-compose.prod.yml pull
+#   cp .env.prod.example .env && $EDITOR .env
+#   docker compose -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# Every secret comes from the host environment — nothing sensitive is defaulted here, and the
-# `:?` forms make a missing one fail at `up` instead of booting something half-configured.
-# See .env.prod.example for the full list.
+# Every secret comes from the environment — nothing sensitive is defaulted here, and the `:?`
+# forms make a missing one fail at `up` instead of booting something half-configured. See
+# .env.prod.example for the full list.
 #
-# Nothing is published to the host: Cloudflare Tunnel reaches the containers over this compose
-# network, so the only ingress is Cloudflare's.
+# Ingress is your choice, and the two modes are mutually exclusive in practice:
+#
+#   default          web is published on ${WEB_PORT:-8080}. Point your own reverse proxy
+#                    (Caddy, Traefik, nginx, NPM) at it, or reach it directly on the LAN.
+#   COMPOSE_PROFILES=cloudflare
+#                    additionally runs a Cloudflare Tunnel, so the stack is reachable from the
+#                    internet with no inbound port open on the router. Set
+#                    WEB_PORT=127.0.0.1:8080 alongside it to keep the host port loopback-only.
+#
+# Anything that terminates TLS lives outside this file — the web container speaks plain HTTP.
 
 name: ovlive
 
@@ -30,10 +39,11 @@ services:
       start_period: 30s
 
   server:
-    # ovlive-platform-api, not ovlive-server: the service and the crate keep the old name, only
-    # the published image differs. ovlive-server, ovlive-web *and* ovlive-api are all already
-    # taken in the owner's ghcr namespace by the pre-Rust projects.
-    image: ${IMAGE_PREFIX:?IMAGE_PREFIX must be set, e.g. ghcr.io/my-org}/ovlive-platform-api:${IMAGE_TAG:-latest}
+    # ovlive-platform-api, not ovlive-server: a ghcr namespace is per *owner*, not per repo, so
+    # the repo-prefixed name keeps these images from colliding with anything else the owner
+    # publishes. The compose service names below stay `server` and `web` — nginx proxies to
+    # `server:8080` by name, so those are load-bearing.
+    image: ${IMAGE_PREFIX:?IMAGE_PREFIX must be set, e.g. ghcr.io/your-github-username}/ovlive-platform-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # Fair use: exactly one ZMQ SUB connection per NDOV datastream, per process. This service
     # holds all three (KV6, KV78Turbo, NS InfoPlus), so it must never be scaled past 1 replica
@@ -55,7 +65,7 @@ services:
       # rather than defaulted: `:?` rejects an empty value too, and an empty GTFS_USER_AGENT
       # would override the binary's built-in default with no identification at all — the one
       # failure mode the policy exists to prevent.
-      GTFS_USER_AGENT: ${GTFS_USER_AGENT:?GTFS_USER_AGENT must be set, and must be a reachable contact — see the data-source policy in CLAUDE.md}
+      GTFS_USER_AGENT: "${GTFS_USER_AGENT:?GTFS_USER_AGENT must name your deployment and a contact address the feed operators can actually reach, e.g. OVLive/0.1 (+contact: you@example.com) — see the data-source policy in CLAUDE.md}"
       GTFS_REFRESH_TZ: Europe/Amsterdam
       GTFS_REFRESH_HOUR: "3"
 
@@ -94,6 +104,11 @@ services:
       # Set it only if you publish the API on a separate hostname.
       API_BASE: ${API_BASE:-}
       API_UPSTREAM: server:8080
+    # The single entry point: the SPA, the REST API, /docs and the WebSocket all arrive here.
+    # Accepts a bind address as well as a bare port, which is how the Cloudflare Tunnel setup
+    # keeps this off the network entirely — WEB_PORT=127.0.0.1:8080.
+    ports:
+      - "${WEB_PORT:-8080}:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/nginx-health"]
       interval: 30s
@@ -102,16 +117,23 @@ services:
       start_period: 10s
     logging: *logging
 
+  # Optional ingress, off unless you ask for it: COMPOSE_PROFILES=cloudflare.
+  # Everything above runs without it, published on ${WEB_PORT:-8080} for your own reverse proxy.
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    profiles: ["cloudflare"]
     # A token-based (remotely-managed) tunnel: the public hostname and its routing live in the
     # Cloudflare Zero Trust dashboard, not in this repo. Point the tunnel's public hostname at
     # the service http://web:80 — that one route covers the SPA, the REST API, /docs and the
     # WebSocket. Turn on "WebSocket" support for the tunnel; /v1/stream needs it.
     command: tunnel --no-autoupdate run
+    # Not `:?` like the other secrets, even though it is required whenever this service runs.
+    # Compose interpolates the entire file before it filters by profile, so a `:?` here would
+    # abort `up` for everyone who never opted into the tunnel. cloudflared exits with its own
+    # clear error on an empty token, which only the people who did opt in ever see.
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set in the host environment}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       - web
     logging: *logging

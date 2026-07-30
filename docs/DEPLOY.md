@@ -1,146 +1,172 @@
 # Deploying OVLive
 
-Two images, built in CI and pulled on the host. Nothing is built in production.
-
-| Image | From | Runtime |
-|---|---|---|
-| `ovlive-platform-api` | `Dockerfile` | distroless — the Rust binary, migrations, `/data` volume |
-| `ovlive-platform-web` | `Dockerfile.web` | nginx — the static SPA, and a proxy to the server |
-
-The image names deliberately differ from the crate (`ovlive-server`) and the package
-(`@ovlive/web`). A ghcr namespace is per *owner*, not per repo, and this owner's already holds
-`ovlive-server`, `ovlive-web` and `ovlive-api` from the pre-Rust projects — `ovlive-api` and
-`ovlive-web` belong to the still-live `EldinHb/ovlive`. Prefixing with the repo name keeps this
-repo's images out of their way permanently.
-
-The compose *service* names are still `server` and `web` — nginx proxies to `server:8080` by
-name, so those are load-bearing and must not be renamed.
-
-The production stack (`docker-compose.prod.yml`) is those two plus `postgres` and
-`cloudflared`. **No port is published to the host**: Cloudflare Tunnel is the only ingress.
+Four containers, pulled from a registry. Nothing is compiled on the host.
 
 ```
-Internet → Cloudflare edge → cloudflared → web (nginx :80) ┬→ static SPA
-                                                           └→ /v1, /health, /docs → server :8080 → postgres
+                          ┌─ web (nginx :80) ─┬→ static SPA
+your ingress ─────────────┤                   └→ /v1, /health, /docs → server :8080 → postgres
+(proxy or tunnel)         │                                                 │
+                          └─ published on ${WEB_PORT}                  NDOV feeds ← ZMQ
 ```
 
-Serving the API through nginx on the SPA's own origin is deliberate: one hostname, no CORS,
-and the WebSocket is same-origin. `API_BASE` overrides it if you ever split them.
+`web` is the only entry point: it serves the SPA and reverse-proxies the API onto the same
+origin, so there is one hostname, no CORS, and a same-origin WebSocket.
 
-## 1. CI → registry
+## Requirements
 
-`.github/workflows/docker.yml` builds both images on every push to `main`, on `v*` tags, and
-on pull requests (PRs build but never push — a fork's token is read-only anyway).
+- **Docker** with Compose v2 (`docker compose`, not `docker-compose`).
+- **~4 GB RAM for `server` alone.** The parsed timetable is ~2 GB resident (1.04M trips,
+  75k stops). Budget 5 GB for the stack.
+- **~1.5 GB disk** on the `ovlive-data` volume: the cached feed (~232 MiB) plus snapshots.
+- **Outbound** access to `gtfs.ovapi.nl:443` and
+  `pubsub.besteffort.ndovloket.nl` on ports `7658`, `7664`, `7817`.
+- No inbound port is needed if you use the Cloudflare Tunnel option below.
 
-**There is nothing to configure.** Pushes authenticate with the automatic `GITHUB_TOKEN` under
-the workflow's `packages: write` permission, and the images land at:
+## 1. Get the images
+
+Fork the repo and push once to `main`. `.github/workflows/docker.yml` builds both images and
+publishes them to **your own** namespace — there is nothing to configure, it authenticates with
+the automatic `GITHUB_TOKEN`:
 
 ```
-ghcr.io/<owner>/ovlive-platform-api
-ghcr.io/<owner>/ovlive-platform-web
+ghcr.io/<your-username>/ovlive-platform-api
+ghcr.io/<your-username>/ovlive-platform-web
 ```
 
-Set the `IMAGE_PREFIX` repository variable only to override that — a different owner, or a
-different registry entirely (`ghcr.io/my-org`). Owner names are lowercased automatically;
-ghcr rejects uppercase in an image path.
-
-Tags produced: `latest` (default branch), `sha-<short>` on every build, the branch name, and
-`X.Y.Z` / `X.Y` for `v*` tags. Images are `linux/amd64` only — an arm64 Rust release build
-under QEMU takes hours, so add a native arm64 runner to the matrix if you need that arch.
-
-### Pulling on the host
-
-Packages inherit the repository's visibility. If the repo is **public**, the host pulls with
-no credentials at all and you can skip this.
-
-If it's **private**, log the Docker daemon in once with a personal access token that has
-`read:packages` (a classic PAT; fine-grained tokens can't read packages yet):
+Packages inherit the repo's visibility. If your fork is **public**, the host pulls with no
+credentials. If it's **private**, log the host's Docker daemon in once with a classic PAT that
+has `read:packages`:
 
 ```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <your-username> --password-stdin
 ```
 
-The credential persists in `~/.docker/config.json`, so `docker compose pull` just works
-afterwards. For an unattended host, prefer a machine account over your own PAT.
+Prefer building on the host instead? `just docker-build` produces
+`local/ovlive-platform-{api,web}:local`. Then set `IMAGE_PREFIX=local` and `IMAGE_TAG=local` in
+`.env` and **skip the `pull` step** — there is no registry to pull from. The Rust release build
+takes 10–20 minutes and wants ~8 GB RAM, which is why CI is the recommended path.
 
-## 2. Cloudflare Tunnel
+## 2. Configure
 
-Create a tunnel in **Zero Trust → Networks → Tunnels** and copy its token. This is a
-*remotely-managed* tunnel: routing lives in the dashboard, not in this repo. Add one public
-hostname:
+```bash
+git clone https://github.com/<your-username>/ovlive-platform.git && cd ovlive-platform
+cp .env.prod.example .env
+$EDITOR .env
+```
 
-| Field | Value |
+Five values are mandatory; `up` aborts with a named error if any is missing.
+
+| Variable | Notes |
 |---|---|
-| Subdomain / domain | e.g. `ovlive.nl` |
-| Service | `HTTP` → `web:80` |
+| `IMAGE_PREFIX` | `ghcr.io/<your-username>`. Lowercase — ghcr rejects uppercase. |
+| `GTFS_USER_AGENT` | **Must be your own contact address.** See the warning below. |
+| `POSTGRES_PASSWORD` | Any strong value; only ever used inside the compose network. |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeds the admin account on the **first boot only**. |
 
-That single route covers the SPA, the REST API, `/docs` and the WebSocket. Enable
-**WebSocket** support for the tunnel (Network → Settings) — `/v1/stream` is the whole live
-map, and it fails closed without it.
+> **`GTFS_USER_AGENT` is not boilerplate.** The timetable and realtime feeds are free,
+> best-effort and community-run by [OVapi](https://gtfs.ovapi.nl) and
+> [NDOV Loket](https://data.ndovloket.nl). This header is the only way an operator can contact
+> whoever is pulling ~232 MiB a day. Put an address *you read* in it — the format is
+> `OVLive/0.1 (+contact: you@example.com)`. There is no default and the server refuses to
+> start without one.
 
-Cloudflare's proxy caches nothing here by default; `/config.js` is served `no-store` and
-`/assets/*` are content-hashed and immutable, so a default cache rule is safe either way.
-
-## 3. Host
-
-Export the secrets in the host environment (shell profile, systemd unit, or secret manager) —
-`.env.prod.example` lists them. `docker-compose.prod.yml` uses the `${VAR:?message}` form for
-each, so a missing one aborts `up` with a named error rather than starting half-configured.
+## 3. Start
 
 ```bash
-export IMAGE_PREFIX=ghcr.io/my-org IMAGE_TAG=latest
-export POSTGRES_PASSWORD=... ADMIN_EMAIL=... ADMIN_PASSWORD=...
-export CLOUDFLARE_TUNNEL_TOKEN=...
-# Quote it — the parentheses would otherwise be a shell syntax error.
-export GTFS_USER_AGENT='OVLive/0.1 (+contact: you@example.com)'
-
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml logs -f server
 ```
 
-Upgrading is `pull` + `up -d` again. Pin `IMAGE_TAG` to a `sha-…` tag if you want the rollback
-to be a one-line change.
+**The first boot takes several minutes** — no snapshot exists yet, so it downloads and parses
+the whole feed before serving anything. Later boots restore in ~25 s.
 
-### What the host needs
+## 4. Choose your ingress
 
-- **~4 GB RAM for the server alone.** The parsed GTFS store is ~2 GB resident (1.04M trips,
-  75k stops), plus the day-scoped stop indexes.
-- **~1.5 GB disk on the `ovlive-data` volume**: the cached `gtfs-nl.zip` (~232 MiB) and the
-  snapshots (`gtfs.snap` is ~325 MB).
-- Outbound access to `gtfs.ovapi.nl:443` and `pubsub.besteffort.ndovloket.nl:7658,7664,7817`.
+`web` is published on `${WEB_PORT:-8080}` and speaks **plain HTTP**. Terminating TLS is on you.
 
-### Two things that will bite you
+**A. Your own reverse proxy** (Caddy, Traefik, nginx, Nginx Proxy Manager) — the default.
+Point it at `http://<host>:8080` and make sure it forwards WebSocket upgrades; `/v1/stream` is
+the entire live map. A minimal Caddyfile:
 
-- **Never scale `server` past one replica.** Fair use with NDOV is one ZMQ SUB connection per
-  datastream *per process*; the service holds three. Two containers means two subscriptions on
-  each, which is how a project gets blocked. `deploy.replicas: 1` documents it, but nothing
-  enforces it against a manual `--scale`.
-- **`ovlive-data` is not a throwaway cache.** Delete it and the next boot re-downloads the
-  232 MiB feed instead of restoring from snapshot — precisely what the data-source policy in
-  [CLAUDE.md](../CLAUDE.md) exists to prevent. Back it up or leave it alone.
-
-## 4. Verify
-
-```bash
-docker compose -f docker-compose.prod.yml ps
-curl -s https://ovlive.example.com/health        # {"gtfs_loaded":true,"live_vehicles":3034,...}
-curl -s https://ovlive.example.com/config.js     # window.__OVLIVE_CONFIG__ = { apiBase: "" };
+```
+ovlive.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
 ```
 
-First boot is slow — no snapshot exists yet, so it downloads and parses the whole feed (a few
-minutes) before `/health` reports `gtfs_loaded: true`. Later boots restore in ~25 s.
+Set `WEB_PORT=127.0.0.1:8080` when the proxy runs on the same host, so the port isn't exposed
+to your LAN as well.
 
-`live_vehicles` in the low thousands means KV6 is flowing. Zero a minute after boot means the
-ZMQ subscriptions aren't delivering — check the `subscribed stream=` lines in the server log.
+**B. Cloudflare Tunnel** — no inbound port, no TLS setup of your own. In **Zero Trust →
+Networks → Tunnels**, create a tunnel, copy its token, and add one public hostname routed to
+`HTTP` → `web:80`. Enable **WebSocket** support under Network → Settings. Then in `.env`:
 
-The server has **no compose healthcheck** on purpose: its image is distroless, so there's no
-shell, curl or wget inside to run one with. Use `/health` through the web container instead.
+```
+COMPOSE_PROFILES=cloudflare
+CLOUDFLARE_TUNNEL_TOKEN=<the token>
+WEB_PORT=127.0.0.1:8080
+```
 
-## Runtime configuration of the SPA
+and `up -d` again. That one route covers the SPA, the API, `/docs` and the WebSocket.
 
-Vite inlines `import.meta.env.*` at build time, so a baked-in API URL would mean one image per
-environment. Instead the web image writes `/config.js` at container start from `$API_BASE`
-(`docker/web/10-ovlive-config.sh`), and `apps/web/app/lib/config.ts` reads
-`window.__OVLIVE_CONFIG__` first, falling back to `VITE_API_BASE` and then to
-`http://127.0.0.1:8080` for `pnpm dev`. Empty means same origin.
+**C. LAN only** — leave `WEB_PORT=8080` and open `http://<host>:8080`. Nothing else to do, but
+note that the admin endpoints use HTTP Basic auth, so don't sign in over plain HTTP across an
+untrusted network.
+
+## 5. Verify
+
+```bash
+curl -s localhost:8080/health          # or your public hostname
+```
+
+```json
+{ "gtfs_loaded": true, "live_vehicles": 3034, ... }
+```
+
+`live_vehicles` in the low thousands means the realtime feeds are flowing. Zero a minute after
+boot means the ZMQ subscriptions aren't delivering — look for `subscribed stream=` lines in
+`logs server`.
+
+## Upgrading and rolling back
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Pin `IMAGE_TAG` to a `sha-<short>` tag if you want rollback to be a one-line change. Every
+build is tagged `latest` (default branch), `sha-<short>`, the branch name, and `X.Y.Z` for
+`v*` tags. Images are **linux/amd64 only** — an arm64 Rust release build under QEMU takes
+hours, so add a native arm64 runner to the CI matrix if you need it.
+
+## Two things that will bite you
+
+- **Never run more than one `server` replica.** Fair use with NDOV is one ZMQ subscription per
+  datastream *per process*, and this service holds three. Two containers means two
+  subscriptions on each, which is how a project gets blocked upstream. `deploy.replicas: 1`
+  documents it, but nothing stops a manual `--scale`.
+- **`ovlive-data` is not a throwaway cache.** It holds the cached feed and the snapshots the
+  server boots from. Delete it and the next start re-downloads 232 MiB instead of restoring —
+  exactly what the data-source policy exists to prevent. Back it up or leave it alone.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `required variable ... is missing a value` | A mandatory var isn't in `.env`. Run `just prod-config` to check before starting. |
+| `GTFS_USER_AGENT is required` in the server log | Set in `.env` but not reaching the container — confirm `.env` sits next to the compose file. |
+| Map loads, no vehicles, `/health` fine | WebSocket isn't being proxied. Check upgrade headers, or enable WebSocket on the tunnel. |
+| `gtfs_loaded: false` for many minutes | Normal on first boot. After that, check outbound access to `gtfs.ovapi.nl:443`. |
+| Server restart-loops on a fresh host | Almost always RAM. The GTFS parse needs ~4 GB; the OOM killer leaves no message in the container log. |
+| `docker compose` says `cloudflared` is unknown | The profile isn't active. `COMPOSE_PROFILES=cloudflare` must be exported or in `.env`. |
+
+`server` has no compose healthcheck on purpose: its image is distroless, so there's no shell,
+curl or wget inside to run one with. Check `/health` through `web` instead.
+
+## Note on the SPA's API URL
+
+Vite inlines env vars at build time, so a baked-in API URL would mean one image per
+deployment. Instead the web container writes `/config.js` at start from `$API_BASE`
+(`docker/web/10-ovlive-config.sh`) and the SPA reads it at runtime. Empty — the default —
+means same origin, which is what you want unless you publish the API on its own hostname.

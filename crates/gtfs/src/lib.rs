@@ -21,6 +21,11 @@ pub use model::{GtfsStore, RouteInfo, StopInfo, TripInfo, UpcomingStop};
 pub use parse::{parse_zip, parse_zip_file};
 pub use stops::{Departure, StopIndexes};
 
+/// Deliberately has no `Default`. `user_agent` must identify the specific deployment doing the
+/// fetching, and a derived default would hand every caller a plausible-looking one — either an
+/// empty string, which is worse than no header, or whatever address was last hardcoded here,
+/// which routes operator complaints to the wrong person. Callers construct it explicitly from
+/// their own config; the server sources `user_agent` from a required env var.
 #[derive(Debug, Clone)]
 pub struct GtfsConfig {
     pub url: String,
@@ -28,17 +33,6 @@ pub struct GtfsConfig {
     /// Local hour of day to check for a new feed (default 3 = 03:00).
     pub refresh_hour: u32,
     pub timezone: Tz,
-}
-
-impl Default for GtfsConfig {
-    fn default() -> Self {
-        Self {
-            url: "https://gtfs.ovapi.nl/gtfs-nl.zip".into(),
-            user_agent: "OVLive/0.1 (+contact: you@example.com)".into(),
-            refresh_hour: 3,
-            timezone: chrono_tz::Europe::Amsterdam,
-        }
-    }
 }
 
 /// Holds the currently-loaded feed and enriches live trips against it.

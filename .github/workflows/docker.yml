@@ -6,7 +6,8 @@
 # it on the host needs a PAT with read:packages (see docs/DEPLOY.md).
 #
 # Override the destination with the IMAGE_PREFIX repository variable if you want a different
-# owner or registry, e.g. ghcr.io/my-org.
+# owner or registry, e.g. ghcr.io/my-org. Forks need no changes at all: <owner> is resolved
+# from the repository, so a fork pushes to its own namespace automatically.
 name: docker
 
 on:
@@ -36,10 +37,9 @@ jobs:
       matrix:
         include:
           # Image names, not crate/package names: the Rust crate is still `ovlive-server` and
-          # the SPA is still `@ovlive/web`. They carry the repo name because the owner's ghcr
-          # namespace is shared and already holds ovlive-server, ovlive-web and ovlive-api from
-          # the pre-Rust projects — one of which is still live. Prefixing with `ovlive-platform`
-          # keeps this repo's images from ever colliding with those.
+          # the SPA is still `@ovlive/web`. A ghcr namespace is per *owner*, not per repo, so
+          # the `ovlive-platform` prefix keeps these from colliding with anything else the
+          # owner publishes under a bare `ovlive-*` name.
           - name: ovlive-platform-api
             dockerfile: Dockerfile
           - name: ovlive-platform-web

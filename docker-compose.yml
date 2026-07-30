@@ -1,3 +1,6 @@
+# Development stack: builds both images from source and publishes them on the host.
+# Run `cp .env.example .env` and fill in GTFS_USER_AGENT first — it has no default anywhere,
+# so `up` aborts without it. For a real deployment use docker-compose.prod.yml instead.
 services:
   postgres:
     image: postgres:16-alpine
@@ -28,7 +31,9 @@ services:
       DATA_DIR: /data
       RUST_LOG: info,ovlive=debug
       GTFS_URL: https://gtfs.ovapi.nl/gtfs-nl.zip
-      GTFS_USER_AGENT: "OVLive/0.1 (+contact: you@example.com)"
+      # From your .env, which compose reads automatically. Never hardcoded here: an address
+      # committed to the repo would be sent by every clone that forgot to change it.
+      GTFS_USER_AGENT: "${GTFS_USER_AGENT:?set GTFS_USER_AGENT in .env — see .env.example}"
       GTFS_REFRESH_TZ: Europe/Amsterdam
       GTFS_REFRESH_HOUR: "3"
       ZMQ_KV6_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7658

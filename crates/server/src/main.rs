@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,ovlive=debug".into()))
         .init();
 
-    let cfg = Config::from_env();
+    let cfg = Config::from_env()?;
     info!("OVLive starting; data_dir={}", cfg.data_dir);
     std::fs::create_dir_all(&cfg.data_dir).ok();
 

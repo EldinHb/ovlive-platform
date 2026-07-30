@@ -55,10 +55,12 @@ prod-logs:
 prod-config:
     docker compose -f docker-compose.prod.yml config
 
-# Build the images the way CI does, locally.
+# Build the images the way CI does, locally. Tagged under a `local/` prefix so the prod
+# compose file can use them as-is with IMAGE_PREFIX=local IMAGE_TAG=local — skip `prod-pull`,
+# there is no registry to pull from.
 docker-build:
-    docker build -f Dockerfile -t ovlive-platform-api:local .
-    docker build -f Dockerfile.web -t ovlive-platform-web:local .
+    docker build -f Dockerfile -t local/ovlive-platform-api:local .
+    docker build -f Dockerfile.web -t local/ovlive-platform-web:local .
 
 # --- Protobuf → TS (clients) ---
 proto-ts:

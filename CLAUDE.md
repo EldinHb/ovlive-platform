@@ -71,9 +71,15 @@ cargo run --release --example validate_feed -p ovlive-gtfs   # ~8 s on the real 
 The feeds are free, best-effort, community-run. Being a bad citizen gets the project blocked.
 
 - **Identifying User-Agent.** `GTFS_USER_AGENT` must name the app *and* a contact address the
-  operators can actually reach. The real one is `OVLive/0.1 (+contact: you@example.com)`, which is
-  also the built-in default (`crates/server/src/config.rs`, `GtfsConfig::default`) — never
-  replace it with an unreachable or placeholder address.
+  operators can actually reach, in the form `OVLive/0.1 (+contact: you@example.com)`.
+  **There is deliberately no default and no address anywhere in this repo**: `env_required` in
+  `crates/server/src/config.rs` refuses to boot without it, `GtfsConfig` has no `Default` impl,
+  and every example file and doc uses a placeholder. That is a de-personalisation requirement,
+  not fussiness — this repo is public, so any committed address would make every unconfigured
+  self-hosted instance fetch ~232 MiB/day under it, sending operator complaints to whoever
+  happened to ship it. Never reintroduce a default, never commit a real address (not even the
+  maintainer's — each deployment supplies its own via `.env` or the host environment), and never
+  substitute a placeholder that doesn't resolve for an address that does.
 - **Conditional requests only.** GTFS fetches send `If-None-Match` / `If-Modified-Since` from
   the persisted `FeedMeta` (`data/gtfs_meta.bin`); `304` means do nothing. One check per day at
   `GTFS_REFRESH_HOUR` local (`GTFS_REFRESH_TZ`).

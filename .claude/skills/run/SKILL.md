@@ -28,16 +28,22 @@ Use whatever `docker port` reports; the rest of this skill writes `5434`.
 ## 2. Backend
 
 The binary does **not** read `.env` (no dotenvy), and `GTFS_USER_AGENT` contains
-parentheses, so `source .env` breaks the shell. Pass env explicitly:
+parentheses, so `source .env` breaks the shell. Extract that one value and pass env explicitly:
 
 ```bash
 cargo build -p ovlive-server
+export GTFS_USER_AGENT="$(sed -n 's/^GTFS_USER_AGENT=//p' .env | head -1)"
 DATABASE_URL=postgres://ovlive:ovlive@localhost:5434/ovlive \
 BIND_ADDR=0.0.0.0:8080 DATA_DIR=./data RUST_LOG=info,ovlive=debug \
-GTFS_USER_AGENT='OVLive/0.1 (+contact: you@example.com)' \
 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=admin \
 ./target/debug/ovlive-server > /tmp/ovlive-server.log 2>&1 &
 ```
+
+`GTFS_USER_AGENT` is required — the server exits with a named error if it is empty, which is
+what you'll see if `.env` is missing (`cp .env.example .env` and set your own contact address).
+Read from `.env` rather than written here on purpose: no contact address is committed to this
+repo, so a clone can never fetch the feed under someone else's name. A boot from snapshot sends
+no request at all, but a cache-cold one does.
 
 Boot takes **~24 s** with `data/*.snap` present — most of it restoring the 325 MB GTFS
 snapshot, then ~2 s building stop indexes. Wait for the log, don't poll the port:

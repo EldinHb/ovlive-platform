@@ -1,6 +1,8 @@
 {
   "name": "ovlive-monorepo",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "repository": "https://github.com/EldinHb/ovlive-platform",
   "packageManager": "pnpm@10.33.2",
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild", "protobufjs"]
