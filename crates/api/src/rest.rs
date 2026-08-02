@@ -109,6 +109,9 @@ pub struct VehicleQuery {
     pub types: Option<String>,
     pub owners: Option<String>,
     pub search: Option<String>,
+    /// Cap on returned vehicles. Absent = no cap, so existing snapshot consumers are
+    /// unaffected; `total` always reports how many matched.
+    pub limit: Option<usize>,
 }
 
 fn build_filters(q: &VehicleQuery) -> Filters {
@@ -140,6 +143,38 @@ fn parse_bbox(s: &str) -> Option<BBox> {
     })
 }
 
+/// Relevance rank of a search hit: 0 = the query *is* the vehicle number or the public line,
+/// 1 = one of those starts with it, 2 = it matched something else (planning, omloop or journey
+/// number). `needle` must already be lowercase.
+///
+/// This only matters because of `limit`. A nationwide search for "1" matches ~2 800 vehicles
+/// (measured on the live feed, 1.4 MB of JSON), so a UI that searches per keystroke has to ask
+/// for a slice — and an arbitrary slice of that is useless, while the vehicles whose line *is*
+/// 1 is what was asked for.
+fn search_rank(t: &LiveTrip, needle: &str) -> u8 {
+    let fields = [
+        t.key.vehicle_number.as_str(),
+        t.line_public_number.as_deref().unwrap_or(""),
+    ];
+    if fields.iter().any(|f| f.eq_ignore_ascii_case(needle)) {
+        return 0;
+    }
+    if fields
+        .iter()
+        .any(|f| f.to_ascii_lowercase().starts_with(needle))
+    {
+        return 1;
+    }
+    2
+}
+
+/// Public line ordered numerically where it is a number ("2" before "10"), with lettered
+/// lines (train type codes like `SPR`) after them.
+fn line_sort_key(t: &LiveTrip) -> (u32, String) {
+    let line = t.line_public_number.clone().unwrap_or_default();
+    (line.parse().unwrap_or(u32::MAX), line)
+}
+
 /// GET /v1/vehicles — snapshot of vehicles (optionally within a bbox / filtered).
 pub async fn list_vehicles(
     _auth: OptionalApiKeyUser,
@@ -148,11 +183,28 @@ pub async fn list_vehicles(
 ) -> Response {
     let idx = state.latest_index();
     let filters = build_filters(&q);
-    let hits: Vec<VehicleJson> = match q.bbox.as_deref().and_then(parse_bbox) {
-        Some(bbox) => idx.query(bbox, &filters).into_iter().map(VehicleJson::from).collect(),
-        None => idx.all(&filters).into_iter().map(VehicleJson::from).collect(),
+    let mut hits: Vec<&LiveTrip> = match q.bbox.as_deref().and_then(parse_bbox) {
+        Some(bbox) => idx.query(bbox, &filters),
+        None => idx.all(&filters),
     };
-    Json(json!({ "count": hits.len(), "vehicles": hits })).into_response()
+    let total = hits.len();
+    // Rank before truncating, so `limit` returns the most relevant matches rather than
+    // whichever ones the index happened to visit first.
+    if !filters.search.is_empty() {
+        let needle = filters.search.to_ascii_lowercase();
+        hits.sort_by_cached_key(|t| {
+            (
+                search_rank(t, &needle),
+                line_sort_key(t),
+                t.key.vehicle_number.clone(),
+            )
+        });
+    }
+    if let Some(n) = q.limit {
+        hits.truncate(n);
+    }
+    let vehicles: Vec<VehicleJson> = hits.into_iter().map(VehicleJson::from).collect();
+    Json(json!({ "count": vehicles.len(), "total": total, "vehicles": vehicles })).into_response()
 }
 
 /// GET /v1/vehicles/:id — full detail including route shape + upcoming stops.
@@ -536,7 +588,7 @@ async fn set_revoked(state: &AppState, id: Uuid, revoked: bool) -> Response {
     match state.db.admin_set_key_revoked(id, revoked).await {
         Ok(true) => {
             // Drop the cached limiter so a re-issued key starts fresh.
-            state.limiters.remove(&id);
+            state.limits.per_key.remove(&id);
             Json(json!({ "id": id, "revoked": revoked })).into_response()
         }
         Ok(false) => err(StatusCode::NOT_FOUND, "key not found"),
@@ -576,4 +628,50 @@ pub async fn health(State(state): State<AppState>) -> Response {
         "gtfs_loaded": state.gtfs.is_loaded(),
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ovlive_core::VehicleKey;
+
+    fn trip(vehicle_number: &str, line: Option<&str>) -> LiveTrip {
+        let mut t = LiveTrip::new(
+            VehicleKey {
+                dataowner: "GVB".into(),
+                vehicle_number: vehicle_number.into(),
+            },
+            chrono::Utc::now(),
+        );
+        t.line_public_number = line.map(str::to_string);
+        t
+    }
+
+    #[test]
+    fn ranks_exact_line_and_vehicle_matches_first() {
+        let q = "13";
+        // Exact on the line, exact on the vehicle number, prefix, then a substring elsewhere.
+        assert_eq!(search_rank(&trip("2010", Some("13")), q), 0);
+        assert_eq!(search_rank(&trip("13", Some("5")), q), 0);
+        assert_eq!(search_rank(&trip("1301", Some("5")), q), 1);
+        assert_eq!(search_rank(&trip("139", Some("139")), q), 1);
+        assert_eq!(search_rank(&trip("4130", Some("5")), q), 2);
+    }
+
+    #[test]
+    fn orders_numeric_lines_before_lettered_ones_and_numerically() {
+        let mut trips = [
+            trip("1", Some("SPR")),
+            trip("2", Some("10")),
+            trip("3", Some("2")),
+            trip("4", None),
+        ];
+        trips.sort_by_cached_key(line_sort_key);
+        let lines: Vec<_> = trips.iter().map(|t| t.line_public_number.clone()).collect();
+        // "2" before "10" (numeric, not lexicographic); no line and lettered lines last.
+        assert_eq!(
+            lines,
+            vec![Some("2".into()), Some("10".into()), None, Some("SPR".into())]
+        );
+    }
 }

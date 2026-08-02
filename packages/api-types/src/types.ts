@@ -137,31 +137,43 @@ export interface StopDeparturesResponse {
   departures: StopDeparture[];
 }
 
+/** A live vehicle as the REST endpoints serialise it (snake_case, unlike the WS `Vehicle`). */
+export interface VehicleSummary {
+  id: string;
+  dataowner: string;
+  vehicle_number: string;
+  line_public_number: string | null;
+  line_planning_number: string | null;
+  vehicle_type: string;
+  operator_name: string | null;
+  lat: number;
+  lon: number;
+  bearing: number | null;
+  delay_seconds: number;
+  /** Whether `delay_seconds` is measured. False = unknown, not on time. */
+  delay_known: boolean;
+  destination: string | null;
+  block_code: string | null;
+  journey_number: string | null;
+  at_stop: boolean;
+  current_stop_id: string | null;
+  line_color: string | null;
+  line_text_color: string | null;
+  last_update: string;
+}
+
+/** REST snapshot/search response (`GET /v1/vehicles`). */
+export interface VehiclesResponse {
+  /** How many are in `vehicles` (after `limit`). */
+  count: number;
+  /** How many matched in total; greater than `count` when `limit` truncated the result. */
+  total: number;
+  vehicles: VehicleSummary[];
+}
+
 /** REST vehicle-detail response. */
 export interface VehicleDetail {
-  vehicle: {
-    id: string;
-    dataowner: string;
-    vehicle_number: string;
-    line_public_number: string | null;
-    line_planning_number: string | null;
-    vehicle_type: string;
-    operator_name: string | null;
-    lat: number;
-    lon: number;
-    bearing: number | null;
-    delay_seconds: number;
-    /** Whether `delay_seconds` is measured. False = unknown, not on time. */
-    delay_known: boolean;
-    destination: string | null;
-    block_code: string | null;
-    journey_number: string | null;
-    at_stop: boolean;
-    current_stop_id: string | null;
-    line_color: string | null;
-    line_text_color: string | null;
-    last_update: string;
-  };
+  vehicle: VehicleSummary;
   route_shape: [number, number][]; // [lat, lon]
   upcoming_stops: {
     stop_id: string;

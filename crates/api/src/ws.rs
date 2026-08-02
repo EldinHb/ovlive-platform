@@ -55,11 +55,26 @@ fn changed(prev: &Sent, lat: f64, lon: f64, delay: i32, at_stop: bool) -> bool {
         || at_stop != prev.at_stop
 }
 
+/// How long a connection may go without a frame before we send a WebSocket Ping.
+///
+/// A subscription with nothing to report sends **nothing** (`build_update` returns `None`), and
+/// that is a normal steady state: an empty viewport, a filter that matches no vehicle, or a tab
+/// left open overnight. Proxies reap a silent socket — Cloudflare closes an idle proxied
+/// WebSocket after ~100 s, which no `proxy_read_timeout` on our own nginx can override — and the
+/// client then reconnects on a loop. A ping well inside that window keeps the socket accounted
+/// for as traffic. Axum answers a client's Ping automatically; this is the other direction, and
+/// browsers reply Pong without the page being involved.
+const KEEPALIVE: Duration = Duration::from_secs(30);
+
 async fn run(socket: WebSocket, state: AppState) {
     let (mut tx, mut rx) = socket.split();
     let mut sub: Option<Subscription> = None;
     let period = Duration::from_millis((1000 / state.tick_hz.max(1)) as u64);
     let mut ticker = tokio::time::interval(period);
+    // Reset on every frame we send, so the ping only fires during genuine silence rather than
+    // adding a periodic frame to the 3 Hz stream a busy viewport already produces.
+    let mut idle = tokio::time::interval(KEEPALIVE);
+    idle.reset();
 
     loop {
         tokio::select! {
@@ -70,6 +85,7 @@ async fn run(socket: WebSocket, state: AppState) {
                             Ok(msg) => {
                                 if let Some(reply) = apply_client_msg(msg, &mut sub) {
                                     if tx.send(Message::Binary(reply)).await.is_err() { break; }
+                                    idle.reset();
                                 }
                             }
                             Err(e) => debug!(target: "ovlive::ws", "bad client frame: {e}"),
@@ -84,8 +100,12 @@ async fn run(socket: WebSocket, state: AppState) {
                 if let Some(sub) = sub.as_mut() {
                     if let Some(frame) = build_update(sub, &state) {
                         if tx.send(Message::Binary(frame)).await.is_err() { break; }
+                        idle.reset();
                     }
                 }
+            }
+            _ = idle.tick() => {
+                if tx.send(Message::Ping(Vec::new())).await.is_err() { break; }
             }
         }
     }

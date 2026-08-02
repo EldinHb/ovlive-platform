@@ -9,7 +9,7 @@ mod rest;
 mod state;
 mod ws;
 
-pub use state::{direct_limiter, AppState, LegacyLimits};
+pub use state::{direct_limiter, AppState, LegacyLimits, RateLimits};
 
 use axum::routing::{delete, get, post};
 use axum::Router;

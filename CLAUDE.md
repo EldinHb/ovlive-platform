@@ -155,10 +155,18 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
   field to `GtfsStore`/`LiveTrip` invalidates the corresponding snapshot** — that is safe and
   self-healing (GTFS falls back to re-parsing the cached zip, live trips refill from the feed
   within a minute), but the first boot after such a change costs a full parse.
-- **Auth is two-tier and data endpoints are public.** No key → anonymous access behind one shared
-  limiter (`PUBLIC_RATE_PER_MIN`); this is what the official web app uses. A valid key → per-key
-  limiter. A *present but invalid* key → 401 (never a silent downgrade). Account/admin endpoints use
-  HTTP Basic; the first boot seeds `ADMIN_EMAIL`/`ADMIN_PASSWORD` if `users` is empty.
+- **Auth is two-tier and data endpoints are public.** No key → anonymous access; this is what the
+  official web app uses. A valid key → per-account and per-key limits. A *present but invalid* key
+  → 401 (never a silent downgrade). Account/admin endpoints use HTTP Basic; the first boot seeds
+  `ADMIN_EMAIL`/`ADMIN_PASSWORD` if `users` is empty.
+- **Rate limits are layered per IP / per account / per key** (`RateLimits` in
+  `api/src/state.rs`), checked outermost-first. `PUBLIC_RATE_PER_MIN` is **per client IP** and set
+  far higher than `USER_RATE_PER_MIN`, because the anonymous tier is one web-app visitor rather
+  than all of them: it used to be a single process-wide bucket, where one scraper meant 429s for
+  every visitor at once. The client IP comes from `CF-Connecting-IP`, else the leftmost
+  `X-Forwarded-For`, **and only when the socket peer is loopback/private** — a request that reaches
+  the port directly can't claim to be someone else. The keyed maps are swept every 60 s
+  (`RateLimits::gc`); they're keyed on remote input, so nothing else bounds them.
 - **`sqlx` uses runtime queries, not the `query!` macros**, so the workspace builds with no live
   database. Keep it that way.
 

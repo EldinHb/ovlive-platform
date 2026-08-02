@@ -126,6 +126,20 @@ export function operatorColor(dataowner: string): string {
   return operatorStyle(dataowner).bg;
 }
 
+// REST endpoints serialise the vehicle type as a lowercase string rather than the WS enum.
+const TYPE_KEYS: Record<string, string> = {
+  bus: "type.bus",
+  tram: "type.tram",
+  metro: "type.metro",
+  train: "type.train",
+  ferry: "type.ferry",
+};
+
+/** i18n key for a REST `vehicle_type` string; a generic "vehicle" for anything unmapped. */
+export function typeKeyOf(vehicleType: string): string {
+  return TYPE_KEYS[vehicleType] ?? "type.vehicle";
+}
+
 export function typeLabel(t: VehicleType): string {
   return ["", "Bus", "Tram", "Metro", "Train", "Ferry"][t] || "Vehicle";
 }

@@ -9,7 +9,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use config::Config;
-use dashmap::DashMap;
 use ovlive_core::{BlockSnapshot, BlockStore, LiveState, LiveTrip, TrainDelaySnapshot, TrainDelays};
 use ovlive_gtfs::{
     load_and_swap, refresh_once, seconds_until_next, FeedMeta, GtfsConfig, GtfsService, GtfsStore,
@@ -204,8 +203,7 @@ async fn main() -> Result<()> {
         blocks: blocks.clone(),
         db,
         index_rx,
-        limiters: Arc::new(DashMap::new()),
-        public_limiter: ovlive_api::direct_limiter(cfg.public_rate_per_min),
+        limits: ovlive_api::RateLimits::new(cfg.public_rate_per_min, cfg.user_rate_per_min),
         tick_hz: cfg.ws_tick_hz,
         tz: cfg.gtfs_tz,
         legacy: ovlive_api::LegacyLimits {
@@ -214,13 +212,32 @@ async fn main() -> Result<()> {
             max_stops_results: cfg.max_stops_results,
         },
     };
+    // The per-IP and per-account buckets are keyed on remote input, so they must be swept or
+    // they grow once per distinct IP for the lifetime of the process.
+    let limits = state.limits.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            limits.gc();
+        }
+    });
+
     let app = ovlive_api::router(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr)
         .await
         .with_context(|| format!("bind {}", cfg.bind_addr))?;
     info!("listening on http://{} (docs at /docs)", cfg.bind_addr);
-    axum::serve(listener, app).await.context("serve")?;
+    // `into_make_service_with_connect_info` so the socket peer reaches the extractors: rate
+    // limiting needs it both as the fallback identity and to decide whether a request's
+    // `X-Forwarded-For` / `CF-Connecting-IP` may be believed at all (see `auth::client_ip`).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("serve")?;
     Ok(())
 }
 
