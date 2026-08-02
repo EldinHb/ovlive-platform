@@ -1,15 +1,7 @@
 import type { StopDeparture, StopDeparturesResponse } from "@ovlive/api-types";
 import { etaLabel, useNow } from "../lib/clock";
-import { etaSeconds, formatDelay, resolveOperator, secsToClock } from "../lib/format";
+import { etaSeconds, formatDelay, resolveOperator, secsToClock, typeKeyOf } from "../lib/format";
 import { useI18n } from "../lib/i18n";
-
-const TYPE_KEYS: Record<string, string> = {
-  bus: "type.bus",
-  tram: "type.tram",
-  metro: "type.metro",
-  train: "type.train",
-  ferry: "type.ferry",
-};
 
 interface Props {
   board: StopDeparturesResponse | null;
@@ -99,7 +91,7 @@ function DepartureRow({
   const expected = secsToClock(d.expected_departure);
   const differ = planned !== expected; // only distinct once the delay moves it by a minute
   const eta = etaLabel(etaSeconds(d.expected_departure, now), t);
-  const typeText = t(TYPE_KEYS[d.vehicle_type] ?? "type.vehicle");
+  const typeText = t(typeKeyOf(d.vehicle_type));
 
   const body = (
     <>

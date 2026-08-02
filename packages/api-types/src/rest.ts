@@ -1,6 +1,13 @@
 // REST client for snapshot/detail/filter-metadata endpoints.
 
-import type { BBox, StopDeparturesResponse, StopsResponse, VehicleDetail } from "./types";
+import { VEHICLE_TYPE_LABEL, type VehicleType } from "./types";
+import type {
+  BBox,
+  StopDeparturesResponse,
+  StopsResponse,
+  VehicleDetail,
+  VehiclesResponse,
+} from "./types";
 
 export interface OperatorInfo {
   dataowner: string;
@@ -30,6 +37,25 @@ export class RestClient {
 
   vehicleDetail(id: string): Promise<VehicleDetail> {
     return this.get(`/v1/vehicles/${encodeURIComponent(id)}`);
+  }
+  /**
+   * Find live vehicles by number, public line, or omloop/journey number, nationwide.
+   *
+   * Always pass a `limit`: a one- or two-character query matches thousands of vehicles
+   * (measured: "1" hits ~2 800, 1.4 MB), and the server ranks by relevance before truncating,
+   * so a small slice is the *best* matches rather than an arbitrary set. `total` in the
+   * response says how many there were.
+   */
+  searchVehicles(
+    query: string,
+    opts: { types?: VehicleType[]; owners?: string[]; limit?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<VehiclesResponse> {
+    const q = new URLSearchParams({ search: query });
+    if (opts.types?.length) q.set("types", opts.types.map((t) => VEHICLE_TYPE_LABEL[t]).join(","));
+    if (opts.owners?.length) q.set("owners", opts.owners.join(","));
+    if (opts.limit) q.set("limit", String(opts.limit));
+    return this.get(`/v1/vehicles?${q}`, signal);
   }
   operators(): Promise<{ operators: OperatorInfo[] }> {
     return this.get(`/v1/operators`);

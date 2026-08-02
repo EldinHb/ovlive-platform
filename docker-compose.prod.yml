@@ -18,6 +18,11 @@
 #                    WEB_PORT=127.0.0.1:8080 alongside it to keep the host port loopback-only.
 #
 # Anything that terminates TLS lives outside this file — the web container speaks plain HTTP.
+#
+# The server additionally publishes ${ADMIN_PORT:-8081} on 127.0.0.1, which is *not* ingress:
+# it is the operator's only path to the endpoints the web container hides from the internet
+# (/v1/register, /v1/keys, /v1/admin/*). Keep it distinct from WEB_PORT — see the server
+# service below for why they cannot share a number.
 
 name: ovlive
 
@@ -82,6 +87,17 @@ services:
       # Seeded only on the first boot, while the users table is empty.
       ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL must be set in the host environment}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in the host environment}
+    # Loopback only, and only so the operator can reach the endpoints the web container hides
+    # from the tunnel (/v1/register, /v1/keys, /v1/admin/*). Not ingress: 127.0.0.1 is not
+    # routable from outside the host, so this is reachable over SSH to the host and nowhere
+    # else. Drop this line and those endpoints become unreachable entirely.
+    #
+    # 8081, not 8080: web already claims ${WEB_PORT:-8080} on the host, and the two cannot
+    # share it. A loopback binding does not "reserve less" than a wildcard one — binding
+    # 0.0.0.0:8080 fails with EADDRINUSE once 127.0.0.1:8080 is taken, so a shared number
+    # means whichever service starts second never comes up.
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8081}:8080"
     volumes:
       # Not a cache you can throw away. It holds the ~232 MiB gtfs-nl.zip and the snapshots the
       # server boots from; losing it forces a fresh download of the feed on next start, which
@@ -120,7 +136,12 @@ services:
   # Optional ingress, off unless you ask for it: COMPOSE_PROFILES=cloudflare.
   # Everything above runs without it, published on ${WEB_PORT:-8080} for your own reverse proxy.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # Pinned by tag *and* digest so `up -d` can never silently swap the thing holding your
+    # ingress: the digest is what docker actually resolves, the tag is there to be read. Bump
+    # both together from https://github.com/cloudflare/cloudflared/releases — cloudflared warns
+    # when it is too far behind, and Cloudflare eventually stops supporting very old builds, so
+    # this is a deliberate periodic update, not a set-and-forget.
+    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
     restart: unless-stopped
     profiles: ["cloudflare"]
     # A token-based (remotely-managed) tunnel: the public hostname and its routing live in the

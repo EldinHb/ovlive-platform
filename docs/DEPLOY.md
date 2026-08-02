@@ -108,11 +108,40 @@ CLOUDFLARE_TUNNEL_TOKEN=<the token>
 WEB_PORT=127.0.0.1:8080
 ```
 
-and `up -d` again. That one route covers the SPA, the API, `/docs` and the WebSocket.
+and `up -d` again. That one route covers the SPA, the API, `/docs` and the WebSocket. The
+tunnel needs no inbound firewall rule and no port forwarding — `cloudflared` dials out.
+
+Cloudflare's proxy caches nothing here by default; `/config.js` and the SPA shell are served
+`no-store` and `/assets/*` are content-hashed and immutable, so a default cache rule is safe
+either way. Don't add a **Cache Everything** rule: it would cache the shell, which names the
+hashed bundles, and pin visitors to an old deploy until the edge cache expires.
 
 **C. LAN only** — leave `WEB_PORT=8080` and open `http://<host>:8080`. Nothing else to do, but
 note that the admin endpoints use HTTP Basic auth, so don't sign in over plain HTTP across an
 untrusted network.
+
+### What stays private
+
+Whichever ingress you pick, the web container returns **404** for `/v1/register`, `/v1/keys*`
+and `/v1/admin/*` ([nginx.conf.template](../docker/web/nginx.conf.template)). Those are the whole
+write surface — open signup, key minting, disabling users — guarded only by HTTP Basic, which is
+not something to leave facing the internet on a home server.
+
+Compose therefore publishes the API itself on `127.0.0.1:${ADMIN_PORT:-8081}`, so you can still
+reach them from the host or through an SSH tunnel:
+
+```bash
+curl -s -u "$ADMIN_EMAIL:$ADMIN_PASSWORD" http://127.0.0.1:8081/v1/admin/users
+ssh -L 8081:127.0.0.1:8081 homeserver    # then hit http://127.0.0.1:8081 from your laptop
+```
+
+`ADMIN_PORT` must differ from `WEB_PORT` — two services cannot bind the same host port, and
+binding loopback rather than the wildcard address makes no difference to that.
+
+`/docs` and `/openapi.json` stay public and still *document* those endpoints; the spec is the
+API's description, not its access control. Drop the `ports:` block from the `server` service to
+close the loopback path too, and add a Cloudflare Access policy if you ever want them published
+with a real identity check in front.
 
 ## 5. Verify
 
@@ -149,6 +178,44 @@ hours, so add a native arm64 runner to the CI matrix if you need it.
 - **`ovlive-data` is not a throwaway cache.** It holds the cached feed and the snapshots the
   server boots from. Delete it and the next start re-downloads 232 MiB instead of restoring —
   exactly what the data-source policy exists to prevent. Back it up or leave it alone.
+
+## Backups
+
+Postgres holds **only** accounts and API keys — never vehicle data — so a nightly logical dump is
+the whole story, and it is small:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T postgres \
+  pg_dump -U ovlive -d ovlive --no-owner | gzip > "ovlive-$(date +%F).sql.gz"
+```
+
+`ovlive-data` needs no scheduled backup: everything in it is reconstructible from upstream. Losing
+it just costs one feed download and a slow first boot, which is worth avoiding but is not data
+loss. Copy it if you want fast recovery.
+
+## Rate limits
+
+Three tiers, all applied to a single request, outermost first
+([auth.rs](../crates/api/src/auth.rs)):
+
+| Tier | Knob | Default | Applies to |
+|---|---|---|---|
+| Per client IP | `PUBLIC_RATE_PER_MIN` | 6000/min | every request |
+| Per account | `USER_RATE_PER_MIN` | 1200/min | requests with a valid key, summed over that account's keys |
+| Per key | the key's own `rate_per_min` | 120/min | requests with that key |
+
+The per-IP tier is high by design. The web app is anonymous, so this is the budget *one* visitor
+gets, and ordinary use (a viewport fetch per pan, the stop layer, a departure board every 12 s, a
+vehicle detail every 8 s) is orders of magnitude below it. It replaced a single process-wide bucket
+that all anonymous traffic shared, where one scraper meant 429s for every visitor.
+
+Because every request arrives from nginx, the client is recovered from `CF-Connecting-IP`, else the
+leftmost `X-Forwarded-For` hop. Those headers are only believed when the socket peer is
+loopback/private — a proxy on our own network — so a request that reaches the port directly is
+always charged to its real address. Nothing else in the app trusts them.
+
+For abuse that spans many IPs, add a Cloudflare WAF rate-limiting rule at the edge; that is the
+right layer for it, and it never reaches the tunnel.
 
 ## Troubleshooting
 

@@ -1,11 +1,12 @@
 //! Shared application state handed to every handler.
 
+use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use chrono_tz::Tz;
 use dashmap::DashMap;
-use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use governor::{DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota, RateLimiter};
 use ovlive_core::{BlockStore, LiveState, VehicleIndex};
 use ovlive_gtfs::GtfsService;
 use ovlive_persist::Db;
@@ -24,17 +25,54 @@ pub struct AppState {
     pub db: Db,
     /// Latest spatial snapshot, republished each server tick.
     pub index_rx: watch::Receiver<Arc<VehicleIndex>>,
-    /// Per-API-key rate limiters, created lazily.
-    pub limiters: Arc<DashMap<Uuid, Arc<DefaultDirectRateLimiter>>>,
-    /// Shared limiter guarding anonymous (keyless) access to the public data endpoints,
-    /// which is how the official web app connects. Bounds abuse without per-user auth.
-    pub public_limiter: Arc<DefaultDirectRateLimiter>,
+    /// Layered request limits: per client IP, per account, per key.
+    pub limits: RateLimits,
     /// WS diff tick rate (Hz).
     pub tick_hz: u32,
     /// Local timezone for service dates and schedule times (Europe/Amsterdam).
     pub tz: Tz,
     /// Limits for the deprecated compatibility endpoints; remove with them.
     pub legacy: LegacyLimits,
+}
+
+/// Request limits, applied outermost-first: every request is bounded per **client IP**, an
+/// authenticated one additionally per **account** and then per **key**.
+///
+/// The per-IP tier replaced a single process-wide bucket for anonymous traffic. That bucket was
+/// shared by every visitor of the web app at once, so one scraper spent the whole allowance and
+/// everybody else got 429s — and behind a reverse proxy or Cloudflare Tunnel there is no
+/// per-visitor accounting at all unless the real client IP is recovered from the proxy headers
+/// (see `client_ip` in `auth.rs`). It is therefore set *far* higher than the account tier:
+/// ordinary use of the map (a viewport fetch, stop layers, departure boards, a detail poll every
+/// 8 s) must never come close, while a runaway client is still bounded.
+#[derive(Clone)]
+pub struct RateLimits {
+    /// Per client IP, for every request. The coarse outer bound.
+    pub per_ip: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    /// Per account, across all of that account's keys — so minting a second key doesn't
+    /// multiply a consumer's allowance.
+    pub per_user: Arc<DefaultKeyedRateLimiter<Uuid>>,
+    /// Per API key, using each key's own `rate_per_min` from the database. Created lazily,
+    /// which is why this is a map of direct limiters rather than one keyed limiter: the quota
+    /// differs per key.
+    pub per_key: Arc<DashMap<Uuid, Arc<DefaultDirectRateLimiter>>>,
+}
+
+impl RateLimits {
+    pub fn new(ip_per_min: u32, user_per_min: u32) -> Self {
+        Self {
+            per_ip: Arc::new(RateLimiter::keyed(Quota::per_minute(nonzero(ip_per_min)))),
+            per_user: Arc::new(RateLimiter::keyed(Quota::per_minute(nonzero(user_per_min)))),
+            per_key: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Drop buckets that are back to full, so the keyed maps don't grow once per IP seen.
+    /// Call periodically — an unbounded map keyed on remote input is a memory leak.
+    pub fn gc(&self) {
+        self.per_ip.retain_recent();
+        self.per_user.retain_recent();
+    }
 }
 
 /// The pre-Rust API's viewport/result caps, kept so the compatibility endpoints reject and
@@ -64,8 +102,11 @@ impl AppState {
     }
 }
 
-/// Build a standalone per-minute rate limiter (used for the shared public limiter).
+fn nonzero(per_min: u32) -> NonZeroU32 {
+    NonZeroU32::new(per_min.max(1)).unwrap()
+}
+
+/// Build a standalone per-minute rate limiter (one API key's own quota).
 pub fn direct_limiter(per_min: u32) -> Arc<DefaultDirectRateLimiter> {
-    let n = NonZeroU32::new(per_min.max(1)).unwrap();
-    Arc::new(RateLimiter::direct(Quota::per_minute(n)))
+    Arc::new(RateLimiter::direct(Quota::per_minute(nonzero(per_min))))
 }

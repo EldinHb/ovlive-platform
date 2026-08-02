@@ -56,6 +56,21 @@ server {
         proxy_buffering off;
     }
 
+    # Account, key-management and admin endpoints are deliberately NOT published.
+    #
+    # They are the entire write surface — self-registration, minting API keys, disabling
+    # users — and HTTP Basic over the tunnel is their only guard, so exposing them means a
+    # password-guessing target and open signup on someone's home server. This block must come
+    # before the /v1 proxy below: regex locations are tried in order and the first match wins.
+    #
+    # 404, not 403: a refusal confirms what exists. Reach them from the host instead, where
+    # compose publishes the API on loopback only:
+    #   curl -u admin@example.com:... http://127.0.0.1:8081/v1/admin/users   # ${ADMIN_PORT}
+    location ~ ^/v1/(register|keys|admin)(/|$) {
+        access_log off;
+        return 404;
+    }
+
     # REST, health, and the embedded API docs.
     location ~ ^/(v1/|health$|docs$|docs/|openapi\.json$) {
         proxy_pass $ovlive_api$request_uri;
@@ -69,7 +84,13 @@ server {
 
     # SPA: every other path is a client-side route, so serve the shell and let the router
     # sort it out.
+    #
+    # The shell is explicitly uncacheable. It names the content-hashed bundles, so a cached copy
+    # pins the whole app to an old deploy — and while Cloudflare doesn't cache HTML by default,
+    # a "Cache Everything" page rule would, at which point the only thing standing between a
+    # deploy and stale clients is this header.
     location / {
         try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-store" always;
     }
 }

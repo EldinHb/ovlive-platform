@@ -52,9 +52,18 @@ pub struct Config {
     pub sweep_interval_secs: u64,
     pub snapshot_interval_secs: u64,
     pub ws_tick_hz: u32,
-    /// Requests/minute allowed for anonymous (keyless) public access, shared across all
-    /// such clients — the official web app path. Generous by default; a global abuse guard.
+    /// Requests/minute allowed **per client IP**, for every request, keyed or not.
+    ///
+    /// Deliberately far above the per-account tier: this is the path the official web app takes
+    /// (no key at all), and normal use of the map — a viewport fetch per pan, the stop layer, a
+    /// departure board every 12 s, a vehicle detail every 8 s — must never approach it, while a
+    /// runaway client is still bounded. It was previously one bucket shared by *all* anonymous
+    /// traffic, which meant one heavy visitor 429'd everybody else.
     pub public_rate_per_min: u32,
+    /// Requests/minute allowed per **account**, summed over all of that account's API keys, so
+    /// a consumer can't multiply its allowance by minting more keys. The per-key
+    /// `rate_per_min` from the database still applies underneath.
+    pub user_rate_per_min: u32,
 
     pub admin_email: String,
     pub admin_password: String,
@@ -148,6 +157,7 @@ impl Config {
             snapshot_interval_secs: env_parse("SNAPSHOT_INTERVAL_SECS", 20),
             ws_tick_hz: env_parse("WS_TICK_HZ", 3),
             public_rate_per_min: env_parse("PUBLIC_RATE_PER_MIN", 6000),
+            user_rate_per_min: env_parse("USER_RATE_PER_MIN", 1200),
 
             admin_email: env_or("ADMIN_EMAIL", "admin@example.com"),
             admin_password: env_or("ADMIN_PASSWORD", "change-me-please"),

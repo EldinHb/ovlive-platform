@@ -153,11 +153,34 @@ button { font-family: inherit; cursor: pointer; }
   padding: 6px 12px; border-radius: 999px; font-size: 13px; transition: all .15s;
 }
 .chip.on { background: var(--accent); color: #fff; border-color: transparent; }
+.search-wrap { position: relative; }
 .search {
   width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
   background: var(--panel-solid); color: var(--text); font-size: 14px; outline: none;
 }
 .search:focus { border-color: var(--accent); }
+/* Sits inside the input; padding-right keeps typed text from running under it. */
+.search-wrap .search { padding-right: 34px; }
+.search-clear {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  border: 0; background: transparent; color: var(--text-dim); font-size: 13px;
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+}
+.search-clear:hover { background: var(--border); color: var(--text); }
+
+/* Search results: a vehicle lookup, not a filter — picking one pans the map to it. Capped
+   height because the panel sits over the map and the server returns up to 25 hits. */
+.results { margin-top: 10px; }
+.results-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.res { border-bottom: 1px solid var(--border); }
+.res:last-child { border-bottom: 0; }
+.res-btn {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 6px; margin: 0 -6px;
+  border: 0; border-radius: 10px; background: transparent; color: var(--text);
+  text-align: left; font: inherit; transition: background .15s;
+}
+.res-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.results-note { font-size: 12px; color: var(--text-dim); padding: 6px 0 2px; }
 
 /* Vehicle side panel */
 .vpanel {
@@ -350,6 +373,8 @@ button { font-family: inherit; cursor: pointer; }
   .filters.open .filters-body { max-height: 44vh; overflow-y: auto; }
   .chip { padding: 8px 14px; }
   .search { padding: 12px; font-size: 16px; } /* 16px avoids iOS zoom-on-focus */
+  /* The panel body already scrolls here; a second scroller inside it is unusable on touch. */
+  .results-list { max-height: none; overflow-y: visible; }
 
   /* Vehicle detail becomes a bottom sheet that leaves the top half of the map visible. */
   .vpanel {

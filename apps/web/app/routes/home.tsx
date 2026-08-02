@@ -7,18 +7,21 @@ import {
   type StopDeparturesResponse,
   type Vehicle,
   type VehicleDetail,
+  type VehicleSummary,
 } from "@ovlive/api-types";
 import { MapView, type MapHandle } from "../components/MapView";
 import { SettingsMenu } from "../components/SettingsMenu";
-import { FiltersPanel } from "../components/FiltersPanel";
+import { FiltersPanel, MIN_QUERY } from "../components/FiltersPanel";
 import { StopPanel } from "../components/StopPanel";
 import { VehiclePanel, type Selected } from "../components/VehiclePanel";
 import { DEFAULT_THEME, THEMES, type MapTheme } from "../lib/styles";
 import {
   API_BASE,
+  getSavedFilters,
   getSavedMultiSelect,
   getSavedShowStops,
   getSavedThemeId,
+  setSavedFilters,
   setSavedMultiSelect,
   setSavedShowStops,
   setSavedThemeId,
@@ -41,6 +44,8 @@ export default function Home() {
 
 const EMPTY_FILTERS: FilterState = { types: [], owners: [], search: "" };
 const MAX_SELECTED = 8;
+/** Enough hits to choose from, small enough to stay a light request per keystroke. */
+const SEARCH_LIMIT = 25;
 
 function MapApp() {
   const { t, lang } = useI18n();
@@ -54,7 +59,14 @@ function MapApp() {
     setThemeState(t);
     setSavedThemeId(t.id);
   };
-  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
+  // Restored from localStorage on mount, so a refresh keeps the user's filter chips.
+  const [filters, setFilters] = useState<FilterState>(() => getSavedFilters() ?? EMPTY_FILTERS);
+  // Vehicle lookup. Deliberately separate from `filters`: it produces a result list to pick
+  // from and never narrows the map, so it is neither sent to the stream nor persisted.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<VehicleSummary[] | null>(null);
+  const [resultTotal, setResultTotal] = useState(0);
+  const [searching, setSearching] = useState(false);
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [count, setCount] = useState(0);
   const [operators, setOperators] = useState<string[]>([]);
@@ -83,6 +95,11 @@ function MapApp() {
   const [loadingBoard, setLoadingBoard] = useState(false);
 
   const rest = useMemo(() => new RestClient(API_BASE), []);
+
+  // Persist the filters on every change. An effect rather than a wrapped setter because
+  // filters are mutated from two places (the panel's chips and the debounced search), one of
+  // them with a functional update that has no resulting value to hand to the writer.
+  useEffect(() => setSavedFilters(filters), [filters]);
 
   // Operator list for the filter chips.
   useEffect(() => {
@@ -167,11 +184,49 @@ function MapApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Debounced free-text search.
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
-  function onSearch(q: string) {
-    clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setFilters((f) => ({ ...f, search: q })), 300);
+  // Vehicle lookup, debounced so typing doesn't fire a request per keystroke and aborted on
+  // the next edit, so a slow earlier response can't land on top of a newer query. The active
+  // chips are applied too, so the results agree with what the map is showing.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < MIN_QUERY) {
+      setResults(null);
+      setResultTotal(0);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => {
+      rest
+        .searchVehicles(
+          q,
+          { types: filters.types, owners: filters.owners, limit: SEARCH_LIMIT },
+          ctrl.signal,
+        )
+        .then((r) => {
+          setResults(r.vehicles);
+          setResultTotal(r.total);
+        })
+        .catch(() => {
+          if (ctrl.signal.aborted) return; // superseded, not failed
+          setResults([]);
+          setResultTotal(0);
+        })
+        .finally(() => !ctrl.signal.aborted && setSearching(false));
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [query, filters.types, filters.owners, rest]);
+
+  /** A search hit was picked: fly to that vehicle and select it, then drop the result list. */
+  function openVehicleFromSearch(v: VehicleSummary) {
+    mapRef.current?.flyTo(v.lon, v.lat);
+    selectVehicle(v.id, undefined);
+    // The vehicle panel now covers this ground; a stale list under it would just be in the way.
+    setQuery("");
   }
 
   function selectVehicle(id: string, v: Vehicle | undefined) {
@@ -335,7 +390,17 @@ function MapApp() {
         </button>
       </div>
 
-      <FiltersPanel filters={filters} operators={operators} onChange={setFilters} onSearch={onSearch} />
+      <FiltersPanel
+        filters={filters}
+        operators={operators}
+        onChange={setFilters}
+        query={query}
+        onQueryChange={setQuery}
+        results={results}
+        total={resultTotal}
+        searching={searching}
+        onPick={openVehicleFromSearch}
+      />
 
       {stopId ? (
         <StopPanel
