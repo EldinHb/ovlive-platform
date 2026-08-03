@@ -13,6 +13,20 @@ Everything you need is in the repo; there are no API keys to obtain, for the fee
 tiles. Please read the [data-source policy](#data-source-policy) first: the upstream feeds are
 run by volunteers and it takes very little to get an IP blocked for everyone.
 
+## How this was built
+
+This project is **vibe coded** — effectively all of the code in this repo was written by
+[Claude Code](https://claude.com/claude-code), as a test of how far autonomous software
+development actually gets on a real, non-toy system: live feeds, a CPU budget, a public API and
+a deployment.
+
+There is still a real software developer behind it. A human sets the direction, decides what
+gets built, reviews the diffs, runs it against the live feeds and pushes back when the answer is
+plausible but wrong — which is most of what [CLAUDE.md](./CLAUDE.md) records. Almost every
+non-obvious rule in there exists because something was measured against the real data and the
+first implementation turned out to be incorrect. Treat the code as reviewed, not as unattended
+output.
+
 ## Monorepo
 
 | Path | What |
