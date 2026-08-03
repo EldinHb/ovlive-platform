@@ -363,7 +363,7 @@ export function VehiclePanel({
           <div className="vpanel-sub">{t("stops.none")}</div>
         )}
         <ul className="stops">
-          {detail?.upcoming_stops.slice(0, 12).map((s, i) => {
+          {detail?.upcoming_stops.map((s, i) => {
             const current = atStop && i === 0; // vehicle is at the first not-yet-departed stop
             const planned = secsToClock(s.scheduled_arrival);
             const expected = secsToClock(s.scheduled_arrival + liveDelay);
