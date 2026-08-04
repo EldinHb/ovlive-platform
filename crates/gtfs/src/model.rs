@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use ovlive_core::{Enricher, LiveTrip, VehicleType};
 use serde::{Deserialize, Serialize};
 
@@ -81,17 +81,25 @@ pub struct TrainTrip {
     pub line_code: String,
 }
 
-/// A resolved next-stop prediction for the vehicle-detail view.
+/// One scheduled call on a trip, for the vehicle-detail trip plan.
+///
+/// Schedule only — no expected times, and the whole trip rather than the part still ahead.
+/// Both of those depend on the vehicle (its delay and its position), and a client already
+/// holds both from the live stream: expected is `scheduled + delay`, and "still ahead" is a
+/// comparison against the stop the vehicle is nearest. Keeping them out is what makes this
+/// payload constant for the duration of a trip, so it can be fetched once instead of on
+/// every detail poll alongside the route shape.
 #[derive(Debug, Clone, Serialize)]
-pub struct UpcomingStop {
+pub struct TripStop {
     pub stop_id: String,
     pub name: String,
     pub lat: f64,
     pub lon: f64,
     pub stop_sequence: u32,
+    /// Seconds since the operating day's local midnight (may exceed 86400 for
+    /// after-midnight service).
     pub scheduled_arrival: i32,
-    /// Scheduled + live delay, in seconds since local midnight.
-    pub expected_arrival: i32,
+    pub scheduled_departure: i32,
 }
 
 /// The whole feed, parsed into lookup tables. Wrapped in `Arc` and hot-swapped daily.
@@ -191,76 +199,29 @@ impl GtfsStore {
         self.trips.get(trip_id).is_some_and(|t| self.runs_on(&t.service_id, date))
     }
 
-    /// Stops the vehicle still has to visit.
+    /// Every scheduled call on a trip, in order.
     ///
-    /// Anchored to the vehicle's *physical position*: the current/next stop is the one
-    /// nearest the vehicle. If the vehicle is at a stop we start there (it hasn't left yet);
-    /// if it's moving we additionally consult the delay-adjusted schedule to decide whether
-    /// it has already *departed* that nearest stop (advance by one). Position-anchoring
-    /// avoids dropping the stop a vehicle is physically dwelling at just because the
-    /// schedule+delay says it "should" have gone. Falls back to pure time (then whole trip)
-    /// when the vehicle position is unknown.
-    #[allow(clippy::too_many_arguments)] // position + schedule + delay + clock all matter here
-    pub fn upcoming_stops(
-        &self,
-        trip_id: &str,
-        delay_seconds: i32,
-        operating_day: Option<&str>,
-        veh_lat: f64,
-        veh_lon: f64,
-        at_stop: bool,
-        now: DateTime<Utc>,
-    ) -> Vec<UpcomingStop> {
+    /// The whole trip, not the remainder: which calls are still ahead depends on the
+    /// vehicle's live position and delay, both of which the client already has, and cutting
+    /// the list server-side is what would otherwise force this (and the route shape beside
+    /// it) into the polled detail response.
+    pub fn trip_stops(&self, trip_id: &str) -> Vec<TripStop> {
         let Some(times) = self.stop_times.get(trip_id) else {
             return Vec::new();
         };
-        let rows: Vec<(&StopTime, &StopInfo)> = times
+        times
             .iter()
-            .filter_map(|st| self.stops.get(&st.stop_id).map(|s| (st, s)))
-            .collect();
-        if rows.is_empty() {
-            return Vec::new();
-        }
-
-        let start = match nearest_stop_index(&rows, veh_lat, veh_lon) {
-            Some(g) if at_stop => g, // dwelling at this stop → it's the current one
-            Some(g) => {
-                // Moving: only skip the nearest stop if the delay-adjusted schedule says
-                // we've already departed it.
-                let departed = operating_day
-                    .and_then(day_midnight_utc)
-                    .map(|mid| {
-                        now >= mid + Duration::seconds((rows[g].0.departure + delay_seconds) as i64)
-                    })
-                    .unwrap_or(false);
-                if departed {
-                    g + 1
-                } else {
-                    g
-                }
-            }
-            // No position → fall back to first stop not yet departed (pure time), else all.
-            None => operating_day
-                .and_then(day_midnight_utc)
-                .and_then(|mid| {
-                    rows.iter().position(|(st, _)| {
-                        mid + Duration::seconds((st.departure + delay_seconds) as i64) >= now
-                    })
+            .filter_map(|st| {
+                let s = self.stops.get(&st.stop_id)?;
+                Some(TripStop {
+                    stop_id: st.stop_id.clone(),
+                    name: s.name.clone(),
+                    lat: s.lat,
+                    lon: s.lon,
+                    stop_sequence: st.stop_sequence,
+                    scheduled_arrival: st.arrival,
+                    scheduled_departure: st.departure,
                 })
-                .unwrap_or(0),
-        };
-
-        rows.get(start..)
-            .unwrap_or(&[])
-            .iter()
-            .map(|(st, s)| UpcomingStop {
-                stop_id: st.stop_id.clone(),
-                name: s.name.clone(),
-                lat: s.lat,
-                lon: s.lon,
-                stop_sequence: st.stop_sequence,
-                scheduled_arrival: st.arrival,
-                expected_arrival: st.arrival + delay_seconds,
             })
             .collect()
     }
@@ -269,37 +230,6 @@ impl GtfsStore {
 /// A date as the `YYYYMMDD` integer `service_dates` is keyed by.
 fn date_key(d: NaiveDate) -> u32 {
     d.format("%Y%m%d").to_string().parse().unwrap_or(0)
-}
-
-/// Midnight of a `YYYY-MM-DD` local (Europe/Amsterdam) date, as a UTC instant.
-fn day_midnight_utc(day: &str) -> Option<DateTime<Utc>> {
-    let d = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
-    let naive = d.and_hms_opt(0, 0, 0)?;
-    let local = chrono_tz::Europe::Amsterdam.from_local_datetime(&naive).single()?;
-    Some(local.with_timezone(&Utc))
-}
-
-/// Index of the stop nearest a position (small-area lat/lon approximation).
-fn nearest_stop_index(rows: &[(&StopTime, &StopInfo)], lat: f64, lon: f64) -> Option<usize> {
-    if !lat.is_finite() || !lon.is_finite() {
-        return None;
-    }
-    let coslat = lat.to_radians().cos();
-    let mut best = None;
-    let mut best_d = f64::MAX;
-    for (i, (_, s)) in rows.iter().enumerate() {
-        if !s.lat.is_finite() || !s.lon.is_finite() {
-            continue;
-        }
-        let dlat = s.lat - lat;
-        let dlon = (s.lon - lon) * coslat;
-        let d = dlat * dlat + dlon * dlon;
-        if d < best_d {
-            best_d = d;
-            best = Some(i);
-        }
-    }
-    best
 }
 
 impl GtfsStore {
