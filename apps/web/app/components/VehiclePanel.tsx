@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Vehicle, VehicleDetail } from "@ovlive/api-types";
+import type { Vehicle, VehicleDetail, VehicleTripPlan } from "@ovlive/api-types";
 import { etaLabel, useNow } from "../lib/clock";
 import {
   distanceMeters,
@@ -11,6 +11,7 @@ import {
   unixToClock,
   updateAge,
 } from "../lib/format";
+import { expectedTime, upcomingStops } from "../lib/trip";
 import { useI18n, type TFn } from "../lib/i18n";
 
 /** Shareable deep link to a vehicle: current page + `?v=<id>`. */
@@ -99,7 +100,8 @@ interface Props {
   selected: Selected[];
   activeId: string;
   detail: VehicleDetail | null;
-  loading: boolean;
+  /** Static half of the detail: route shape + the trip's scheduled stops. Null while loading. */
+  trip: VehicleTripPlan | null;
   following: boolean;
   isolate: boolean;
   onToggleIsolate: () => void;
@@ -115,7 +117,7 @@ export function VehiclePanel({
   selected,
   activeId,
   detail,
-  loading,
+  trip,
   following,
   isolate,
   onToggleIsolate,
@@ -172,12 +174,20 @@ export function VehiclePanel({
         ? { line: basic.nextLine, dest: basic.nextDestination, start: basic.nextStart }
         : null;
 
-  // "At stop" only when the vehicle both reports at-stop AND is actually next to the first
-  // upcoming stop (which, server-side, is the stop nearest the vehicle).
-  const stops = detail?.upcoming_stops ?? [];
   const vehLat = basic?.lat ?? v?.lat;
   const vehLon = basic?.lon ?? v?.lon;
   const reportsAtStop = basic?.atStop ?? v?.at_stop ?? false;
+
+  // The trip plan holds every scheduled stop; which of them are still ahead depends on where
+  // the vehicle is now, so it's derived here rather than asked of the server on every poll.
+  // Recomputed as the clock ticks, so a stop drops off the list the moment it's behind us
+  // instead of at the next poll.
+  const stops = trip
+    ? upcomingStops(trip.stops, { lat: vehLat, lon: vehLon, atStop: reportsAtStop, delay: liveDelay }, now)
+    : [];
+
+  // "At stop" only when the vehicle both reports at-stop AND is actually next to the first
+  // upcoming stop (which is the stop nearest the vehicle).
   const atStop =
     reportsAtStop &&
     stops.length > 0 &&
@@ -358,19 +368,21 @@ export function VehiclePanel({
         )}
 
         <h3 className="section-title">{t("stops.next")}</h3>
-        {loading && !detail && <div className="vpanel-sub">{t("stops.loading")}</div>}
-        {detail && detail.upcoming_stops.length === 0 && (
-          <div className="vpanel-sub">{t("stops.none")}</div>
-        )}
+        {!trip && <div className="vpanel-sub">{t("stops.loading")}</div>}
+        {trip && stops.length === 0 && <div className="vpanel-sub">{t("stops.none")}</div>}
         <ul className="stops">
-          {detail?.upcoming_stops.map((s, i) => {
+          {stops.map((s, i) => {
             const current = atStop && i === 0; // vehicle is at the first not-yet-departed stop
+            // Expected is the schedule shifted by the vehicle's live delay — the endpoint
+            // sends schedule only, precisely so it doesn't have to be re-sent as the delay
+            // moves.
+            const arrival = expectedTime(s.scheduled_arrival, liveDelay);
             const planned = secsToClock(s.scheduled_arrival);
-            const expected = secsToClock(s.scheduled_arrival + liveDelay);
+            const expected = secsToClock(arrival);
             const differ = planned !== expected; // only distinct once they differ by a minute
             // Countdown against the delay-adjusted arrival — that's the time the vehicle is
             // actually expected, so the number tracks the live delay as it changes.
-            const eta = etaSeconds(s.scheduled_arrival + liveDelay, now);
+            const eta = etaSeconds(arrival, now);
             return (
               <li key={s.stop_id + s.stop_sequence} className={current ? "current" : ""}>
                 <span className="stop-name">

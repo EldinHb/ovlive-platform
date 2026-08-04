@@ -3,7 +3,7 @@
   "info": {
     "title": "OVLive API",
     "version": "0.1.0",
-    "description": "Realtime Dutch public-transit data. Query live vehicles or stream them over WebSocket.\n\n**Auth**\n- Data endpoints are public \u2014 no key required (this is what the official web app uses). Anonymous access is rate-limited **per client IP**, high enough that ordinary use of the map never reaches it. Supplying an API key (`Authorization: Bearer ovl_...`, `X-API-Key`, or `?key=` for the WebSocket) adds attributable **per-account** and **per-key** limits for higher sustained throughput; a `429` body names the tier that was hit. Register an account and create a key for programmatic/high-volume use.\n- Account & admin endpoints use HTTP Basic (your email + password).\n\n**WebSocket** `GET /v1/stream` (optionally `?key=ovl_...`) speaks protobuf (see packages/proto/ovlive.proto): send `Subscribe{viewport,filters}`, receive batched `Update{entered,moved,left}` diffs.\n\n**Data sources.** Bus, tram, metro and ferry positions come from BISON KV6; **train** positions come from NS InfoPlus, a separate feed with different properties:\n- Trains have `dataowner` `IFF` (the namespace gtfs-nl uses for rail), so a vehicle id looks like `IFF:8743`, where `8743` is the train number. `realtime_trip_id` is gtfs-nl's own value, e.g. `IFF:SPR:8743`, and `line` is the train type code (`SPR`, `IC`, `ICD`, `ICE`, ...).\n- **`delay_seconds` is only meaningful when `delay_known` is true.** Unknown and on-time are both `0`, so a client that ignores the flag reports trains as punctual when their punctuality is simply unknown. The position feed carries no punctuality at all; it comes from a second NS feed (InfoPlus RitInfo) published per journey revision rather than continuously, so train coverage builds up over time and is never complete.\n- `at_stop`/`current_stop_id` are never set for trains (the position feed has no stop passages), and `upcoming_stops` is the schedule shifted by the trip delay. On a departure board a live train with no punctuality yet has `delay_seconds: null`, and `expected_departure` equal to `scheduled_departure`.\n- `next_trip` is never present for trains (it derives from KV78Turbo, which carries no rail).\n- Only NS-operated trains report positions. Other rail concessions (Arriva, Blauwnet, ...) are in the schedule but not in this feed, and a small share of NS runs (empty stock, units without GPS telemetry) appear with no matching trip: `line`, `destination` and `operator` are then empty while `vehicle_type` is still `train`.\n\n**Deprecated endpoints** tagged `Deprecated` reproduce the pre-Rust OVLive API exactly so existing consumers keep working during migration. They will be removed \u2014 do not build against them."
+    "description": "Realtime Dutch public-transit data. Query live vehicles or stream them over WebSocket.\n\n**Auth**\n- Data endpoints are public \u2014 no key required (this is what the official web app uses). Anonymous access is rate-limited **per client IP**, high enough that ordinary use of the map never reaches it. Supplying an API key (`Authorization: Bearer ovl_...`, `X-API-Key`, or `?key=` for the WebSocket) adds attributable **per-account** and **per-key** limits for higher sustained throughput; a `429` body names the tier that was hit. Register an account and create a key for programmatic/high-volume use.\n- Account & admin endpoints use HTTP Basic (your email + password).\n\n**WebSocket** `GET /v1/stream` (optionally `?key=ovl_...`) speaks protobuf (see packages/proto/ovlive.proto): send `Subscribe{viewport,filters}`, receive batched `Update{entered,moved,left}` diffs.\n\n**Data sources.** Bus, tram, metro and ferry positions come from BISON KV6; **train** positions come from NS InfoPlus, a separate feed with different properties:\n- Trains have `dataowner` `IFF` (the namespace gtfs-nl uses for rail), so a vehicle id looks like `IFF:8743`, where `8743` is the train number. `realtime_trip_id` is gtfs-nl's own value, e.g. `IFF:SPR:8743`, and `line` is the train type code (`SPR`, `IC`, `ICD`, `ICE`, ...).\n- **`delay_seconds` is only meaningful when `delay_known` is true.** Unknown and on-time are both `0`, so a client that ignores the flag reports trains as punctual when their punctuality is simply unknown. The position feed carries no punctuality at all; it comes from a second NS feed (InfoPlus RitInfo) published per journey revision rather than continuously, so train coverage builds up over time and is never complete.\n- `at_stop`/`current_stop_id` are never set for trains (the position feed has no stop passages), and their trip plan is pure schedule (shift it by the trip delay yourself, and only when `delay_known`). On a departure board a live train with no punctuality yet has `delay_seconds: null`, and `expected_departure` equal to `scheduled_departure`.\n- `next_trip` is never present for trains (it derives from KV78Turbo, which carries no rail).\n- Only NS-operated trains report positions. Other rail concessions (Arriva, Blauwnet, ...) are in the schedule but not in this feed, and a small share of NS runs (empty stock, units without GPS telemetry) appear with no matching trip: `line`, `destination` and `operator` are then empty while `vehicle_type` is still `train`.\n\n**Deprecated endpoints** tagged `Deprecated` reproduce the pre-Rust OVLive API exactly so existing consumers keep working during migration. They will be removed \u2014 do not build against them."
   },
   "servers": [
     {
@@ -231,8 +231,39 @@
     },
     "/v1/vehicles/{id}": {
       "get": {
-        "summary": "Vehicle detail (route shape, upcoming stops, predicted next trip)",
-        "description": "Includes `next_trip` (`{ line_public_number, destination, start_unix }` or null) \u2014 the line this vehicle becomes next, from KV78Turbo block/omloop chaining. The WS `VehicleState` carries the same as `next_line_public_number` / `next_destination` / `next_start_unix`.",
+        "summary": "Vehicle detail: live state + predicted next trip (poll this)",
+        "description": "`{ vehicle, trip_id, next_trip }` \u2014 the parts of the vehicle view that change. This is the endpoint to poll.\n\nThe schedule half (route shape and stop list) is **not** here: it is constant for the duration of a trip and is served separately by `/v1/vehicles/{id}/trip`. `trip_id` is the matched GTFS trip (null when the vehicle isn't matched to one), so refetch that endpoint only when this value changes.\n\n`next_trip` is `{ line_public_number, destination, start_unix }` or null \u2014 the line this vehicle becomes next, from KV78Turbo block/omloop chaining. The WS `VehicleState` carries the same as `next_line_public_number` / `next_destination` / `next_start_unix`.",
+        "security": [
+          {},
+          {
+            "ApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "\"<dataowner>:<vehicle_number>\"",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/v1/vehicles/{id}/trip": {
+      "get": {
+        "summary": "Vehicle trip plan: route shape + scheduled stops (fetch once per trip)",
+        "description": "`{ trip_id, route_shape, stops }` \u2014 the schedule behind the vehicle's current trip. Nothing in it changes while the vehicle runs that trip, so fetch it once and refetch only when `trip_id` from `/v1/vehicles/{id}` changes. `trip_id` is null, with an empty shape and no stops, when GTFS hasn't matched the vehicle to a trip.\n\n`route_shape` is `[[lat, lon], ...]`. `stops` covers the **whole** trip in order \u2014 `{ stop_id, name, lat, lon, stop_sequence, scheduled_arrival, scheduled_departure }`, seconds since the operating day's local midnight (may exceed 86400 for after-midnight service).\n\nThere are deliberately no expected times and no \"upcoming\" filtering, so that this payload stays constant: expected is `scheduled + delay_seconds` from the live vehicle (only meaningful when `delay_known`), and the stops still ahead are those from the one nearest the vehicle's position onward \u2014 that stop itself when it reports `at_stop`, otherwise the next one once its `scheduled_departure + delay_seconds` has passed.",
         "security": [
           {},
           {

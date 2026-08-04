@@ -6,6 +6,7 @@ import type {
   StopDeparturesResponse,
   StopsResponse,
   VehicleDetail,
+  VehicleTripPlan,
   VehiclesResponse,
 } from "./types";
 
@@ -35,8 +36,17 @@ export class RestClient {
     return res.json() as Promise<T>;
   }
 
-  vehicleDetail(id: string): Promise<VehicleDetail> {
-    return this.get(`/v1/vehicles/${encodeURIComponent(id)}`);
+  /**
+   * Live half of the vehicle view — poll this. The route shape and stop list are constant
+   * for the trip and come from {@link vehicleTrip}; refetch that only when `trip_id` here
+   * changes.
+   */
+  vehicleDetail(id: string, signal?: AbortSignal): Promise<VehicleDetail> {
+    return this.get(`/v1/vehicles/${encodeURIComponent(id)}`, signal);
+  }
+  /** Schedule half of the vehicle view: route shape + every scheduled call. Fetch once per trip. */
+  vehicleTrip(id: string, signal?: AbortSignal): Promise<VehicleTripPlan> {
+    return this.get(`/v1/vehicles/${encodeURIComponent(id)}/trip`, signal);
   }
   /**
    * Find live vehicles by number, public line, or omloop/journey number, nationwide.

@@ -171,23 +171,50 @@ export interface VehiclesResponse {
   vehicles: VehicleSummary[];
 }
 
-/** REST vehicle-detail response. */
+/**
+ * REST vehicle-detail response (`GET /v1/vehicles/{id}`) — the half that changes, so this is
+ * the one to poll. The route shape and stop list are in `VehicleTripPlan`.
+ */
 export interface VehicleDetail {
   vehicle: VehicleSummary;
-  route_shape: [number, number][]; // [lat, lon]
-  upcoming_stops: {
-    stop_id: string;
-    name: string;
-    lat: number;
-    lon: number;
-    stop_sequence: number;
-    scheduled_arrival: number;
-    expected_arrival: number;
-  }[];
+  /** Matched GTFS trip; null when unmatched. Refetch the trip plan when this changes. */
+  trip_id: string | null;
   /** Predicted next trip for this vehicle (block/omloop chaining); null if unknown. */
   next_trip: {
     line_public_number: string;
     destination: string;
     start_unix: number;
   } | null;
+}
+
+/**
+ * One scheduled call on a trip. Times are seconds since the operating day's local
+ * (Europe/Amsterdam) midnight, so they can exceed 86400 for after-midnight service; use
+ * `etaSeconds`/`secsToClock` on them.
+ *
+ * Schedule only, by design — expected is `scheduled + delay` from the live vehicle, and only
+ * when its `delayKnown` is set.
+ */
+export interface TripStop {
+  stop_id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  stop_sequence: number;
+  scheduled_arrival: number;
+  scheduled_departure: number;
+}
+
+/**
+ * REST vehicle trip-plan response (`GET /v1/vehicles/{id}/trip`) — the half that doesn't
+ * change while the vehicle runs this trip. Fetch once, refetch only when the detail
+ * response's `trip_id` changes.
+ *
+ * `stops` is the **whole** trip; the calls still ahead are filtered client-side from the
+ * vehicle's live position (see `upcomingStops` in the web app).
+ */
+export interface VehicleTripPlan {
+  trip_id: string | null;
+  route_shape: [number, number][]; // [lat, lon]
+  stops: TripStop[];
 }

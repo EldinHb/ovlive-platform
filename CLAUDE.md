@@ -347,6 +347,19 @@ Consequences, so this isn't rediscovered the hard way:
   upcoming stops, "continues as" card), `FiltersPanel`, NL/EN i18n in `app/lib/i18n.tsx`. It talks
   to the backend only through `@ovlive/api-types` (`LiveClient` WS + `RestClient`), aliased to
   source by `apps/web/vite.config.ts`. Check `apps/web` before claiming a feature is user-visible.
+- **The vehicle detail is split into a polled half and a static half**, because only one of them
+  changes. `GET /v1/vehicles/{id}` (polled every 8 s) carries the vehicle, `next_trip`, and the
+  matched `trip_id`; `GET /v1/vehicles/{id}/trip` carries the route shape and **every** scheduled
+  call, and is fetched once — again only when `trip_id` changes. Measured on a live NS trip: 28.3
+  KB of shape+stops against a 0.5 KB poll, so the shape was ~98% of a payload that could not have
+  moved.
+  The server therefore sends **schedule only**: no expected times and no "upcoming" filtering.
+  Both are derived in `apps/web/app/lib/trip.ts` from state the client already holds — expected is
+  `scheduled + delay` (and only meaningful with `delay_known`), and the stops still ahead run from
+  the one nearest the vehicle: that stop itself while it reports `at_stop`, else the next once
+  `scheduled_departure + delay` has passed. Deriving it client-side also makes the list drop stops
+  as the local clock ticks rather than at the next poll. Prefer this split when adding to the
+  vehicle view: ask whether the field can change mid-trip, and put it in the static half if not.
 - **The stop layer is REST, not the live stream.** Stops change only when the daily GTFS feed
   swaps, so `MapView` fetches `GET /v1/stops/viewport` (supported; unrelated to the deprecated
   `/v1/stops`) for a box padded 35% around the view and re-asks only when the user pans outside
@@ -367,7 +380,8 @@ Consequences, so this isn't rediscovered the hard way:
   The board replaces the vehicle panel while
   open (they share `.vpanel`, so both get the desktop dock / mobile sheet and `panelAwareOffset`),
   leaving the vehicle selection intact underneath, and opening one stops following so the camera
-  isn't dragged off. Times are seconds-since-local-midnight, the same axis as `upcoming_stops`.
+  isn't dragged off. Times are seconds-since-local-midnight, the same axis as the trip plan's
+  stops.
 - `apps/mobile` (Expo, Phase 3) does not exist yet. `migrations/0001` reserves a `trip_history`
   table for Phase 4 that nothing writes to.
 - Comments explain *why* (feed quirks, policy, CPU trade-offs), not *what*. Match that: the

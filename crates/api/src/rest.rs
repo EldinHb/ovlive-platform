@@ -207,7 +207,14 @@ pub async fn list_vehicles(
     Json(json!({ "count": vehicles.len(), "total": total, "vehicles": vehicles })).into_response()
 }
 
-/// GET /v1/vehicles/:id — full detail including route shape + upcoming stops.
+/// GET /v1/vehicles/:id — the parts of a vehicle's detail that change: position, delay, and
+/// the predicted next trip.
+///
+/// This is the polled half of the vehicle view. The schedule half — route shape and stop
+/// list — is constant for the duration of a trip and lives at `/v1/vehicles/:id/trip`, keyed
+/// by the `trip_id` echoed here: a client refetches it only when that value changes. Sending
+/// the shape on every poll was the bulk of this response (measured on a live NS trip: 28.3 KB
+/// of shape+stops against a 0.5 KB poll) for data that cannot have moved.
 pub async fn vehicle_detail(
     _auth: OptionalApiKeyUser,
     State(state): State<AppState>,
@@ -217,23 +224,6 @@ pub async fn vehicle_detail(
         return err(StatusCode::NOT_FOUND, "vehicle not found");
     };
     let vehicle = VehicleJson::from(&trip);
-
-    let mut shape: Vec<[f64; 2]> = Vec::new();
-    let mut upcoming = Vec::new();
-    if let (Some(store), Some(tid)) = (state.gtfs.current(), trip.matched_trip_id.as_deref()) {
-        if let Some(pts) = store.shape_of_trip(tid) {
-            shape = pts.clone();
-        }
-        upcoming = store.upcoming_stops(
-            tid,
-            trip.delay_seconds,
-            trip.operating_day.as_deref(),
-            trip.lat,
-            trip.lon,
-            trip.at_stop,
-            chrono::Utc::now(),
-        );
-    }
 
     let next_trip = crate::convert::predict_next(&state.blocks, &trip).map(|n| {
         json!({
@@ -245,9 +235,44 @@ pub async fn vehicle_detail(
 
     Json(json!({
         "vehicle": vehicle,
-        "route_shape": shape,
-        "upcoming_stops": upcoming,
+        "trip_id": trip.matched_trip_id,
         "next_trip": next_trip,
+    }))
+    .into_response()
+}
+
+/// GET /v1/vehicles/:id/trip — the vehicle's schedule: route shape and every scheduled call.
+///
+/// Fetch once per trip. Nothing here changes while the vehicle runs it, so pair it with
+/// `/v1/vehicles/:id` (polled) and refetch only when that response's `trip_id` changes.
+///
+/// Stop times are schedule only, both in the sense that they are the whole trip rather than
+/// the remainder and in that they carry no expected times: the remainder follows from the
+/// vehicle's live position and expected is `scheduled + delay_seconds`, and a client holding
+/// the live vehicle has both inputs already. `trip_id` is null — with empty shape and stops —
+/// for a vehicle GTFS hasn't matched to a trip (a small share of NS runs; see the docs).
+pub async fn vehicle_trip(
+    _auth: OptionalApiKeyUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(trip) = state.live.get(&id) else {
+        return err(StatusCode::NOT_FOUND, "vehicle not found");
+    };
+
+    let mut shape: Vec<[f64; 2]> = Vec::new();
+    let mut stops = Vec::new();
+    if let (Some(store), Some(tid)) = (state.gtfs.current(), trip.matched_trip_id.as_deref()) {
+        if let Some(pts) = store.shape_of_trip(tid) {
+            shape = pts.clone();
+        }
+        stops = store.trip_stops(tid);
+    }
+
+    Json(json!({
+        "trip_id": trip.matched_trip_id,
+        "route_shape": shape,
+        "stops": stops,
     }))
     .into_response()
 }

@@ -17,7 +17,7 @@ use ovlive_core::{Enricher, LiveTrip};
 use tracing::info;
 
 pub use download::{conditional_download_to, DownloadOutcome, FeedMeta};
-pub use model::{GtfsStore, RouteInfo, StopInfo, TripInfo, UpcomingStop};
+pub use model::{GtfsStore, RouteInfo, StopInfo, TripInfo, TripStop};
 pub use parse::{parse_zip, parse_zip_file};
 pub use stops::{Departure, StopIndexes};
 

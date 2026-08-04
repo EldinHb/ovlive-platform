@@ -8,6 +8,7 @@ import {
   type Vehicle,
   type VehicleDetail,
   type VehicleSummary,
+  type VehicleTripPlan,
 } from "@ovlive/api-types";
 import { MapView, type MapHandle } from "../components/MapView";
 import { SettingsMenu } from "../components/SettingsMenu";
@@ -81,7 +82,11 @@ function MapApp() {
   const [selected, setSelected] = useState<Selected[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<VehicleDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  // Route shape + the trip's scheduled stops. Fetched separately from `detail` because none of
+  // it changes while the vehicle runs the trip, so it doesn't belong in the poll.
+  const [trip, setTrip] = useState<VehicleTripPlan | null>(null);
+  // Bumped when the vehicle turns out to be on a different GTFS trip than the loaded plan.
+  const [tripGen, setTripGen] = useState(0);
   const [following, setFollowing] = useState(false);
   // Bumped to force a detail refetch when nothing else in the deps changed (e.g. resuming
   // onto a vehicle's new trip, where the id — and thus activeId — stays the same).
@@ -106,7 +111,9 @@ function MapApp() {
     rest.operators().then((r) => setOperators(r.operators.map((o) => o.dataowner))).catch(() => {});
   }, [rest]);
 
-  // Fetch detail for the ACTIVE vehicle, then poll so the upcoming-stops list stays current.
+  // Poll the ACTIVE vehicle's live detail: position, delay, predicted next trip. Deliberately
+  // small — the route shape and the stop list are static for the trip and come from the plan
+  // fetch below, so this is the only thing on an 8 s timer.
   useEffect(() => {
     if (!activeId) {
       setDetail(null);
@@ -114,7 +121,6 @@ function MapApp() {
     }
     setDetail(null); // clear stale detail from the previously active tab
     let alive = true;
-    setLoadingDetail(true);
     const load = (initial: boolean) =>
       rest
         .vehicleDetail(activeId)
@@ -136,8 +142,7 @@ function MapApp() {
             );
           }
         })
-        .catch(() => initial && alive && setDetail(null))
-        .finally(() => initial && alive && setLoadingDetail(false));
+        .catch(() => initial && alive && setDetail(null));
     load(true);
     const t = setInterval(() => load(false), 8000);
     return () => {
@@ -145,6 +150,30 @@ function MapApp() {
       clearInterval(t);
     };
   }, [activeId, rest, detailNonce]);
+
+  // The active vehicle's trip plan (route shape + every scheduled stop). Fetched once per
+  // trip: a shape is by far the largest thing the vehicle view loads — thousands of points on
+  // a rail trip — and it cannot change while the vehicle is running that trip.
+  useEffect(() => {
+    if (!activeId) {
+      setTrip(null);
+      return;
+    }
+    setTrip(null); // the previous vehicle's shape must not linger on the map
+    const ctrl = new AbortController();
+    rest
+      .vehicleTrip(activeId, ctrl.signal)
+      .then((p) => !ctrl.signal.aborted && setTrip(p))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [activeId, rest, detailNonce, tripGen]);
+
+  // Refetch the plan when the vehicle moves onto a different trip than the one we loaded.
+  // Only a *known* trip id counts: an unmatched vehicle reports null on every poll, and
+  // treating that as a change would refetch the plan forever.
+  useEffect(() => {
+    if (detail?.trip_id && trip && trip.trip_id !== detail.trip_id) setTripGen((n) => n + 1);
+  }, [detail?.trip_id, trip]);
 
   // Departure board for the open stop, polled so countdowns and live matches stay current.
   // 12 s: the board's realtime content is the trip delay of the vehicles running it, which
@@ -357,7 +386,7 @@ function MapApp() {
         following={following}
         showStops={showStops}
         selectedStopId={stopId}
-        routeShape={detail?.route_shape ?? null}
+        routeShape={trip?.route_shape ?? null}
         onSelectStop={openStop}
         onSelectVehicle={selectVehicle}
         onSelectedLive={onSelectedLive}
@@ -414,7 +443,7 @@ function MapApp() {
           selected={selected}
           activeId={activeId}
           detail={detail}
-          loading={loadingDetail}
+          trip={trip}
           following={following}
           isolate={isolate}
           onToggleIsolate={() => setIsolate((v) => !v)}
