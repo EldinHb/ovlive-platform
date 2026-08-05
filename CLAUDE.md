@@ -352,7 +352,11 @@ Consequences, so this isn't rediscovered the hard way:
   matched `trip_id`; `GET /v1/vehicles/{id}/trip` carries the route shape and **every** scheduled
   call, and is fetched once — again only when `trip_id` changes. Measured on a live NS trip: 28.3
   KB of shape+stops against a 0.5 KB poll, so the shape was ~98% of a payload that could not have
-  moved.
+  moved. **"When `trip_id` changes" means the id the poll reports changing — not the poll and the
+  loaded plan disagreeing.** The two are answers about different instants (the plan is fetched
+  fresh, the poll is up to 8 s stale), so a trip change leaves them legitimately mismatched for
+  seconds; refetching until they agree spins, because each answer re-arms the comparison — one
+  whole route shape per round trip (~15/s) until the poll catches up.
   The server therefore sends **schedule only**: no expected times and no "upcoming" filtering.
   Both are derived in `apps/web/app/lib/trip.ts` from state the client already holds — expected is
   `scheduled + delay` (and only meaningful with `delay_known`), and the stops still ahead run from

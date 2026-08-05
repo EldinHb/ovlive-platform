@@ -344,8 +344,12 @@ button { font-family: inherit; cursor: pointer; }
 .dep-chevron { flex: none; color: var(--text-dim); font-size: 18px; }
 .stop-foot { margin-top: 14px; }
 
-/* Above the sheet grip, whose hit strip runs the full width of the panel's top edge. */
-.icon-close { position: absolute; z-index: 3; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
+/* Above everything else in the panel. It is the only way out of a panel, so it must never be
+   the one that loses a stacking contest: both the sheet grip and the tab row are positioned
+   boxes that span the full width of the panel's top edge and so cover this corner. The tab row
+   in particular sits at z-index 3 and comes later in the DOM, which used to swallow every tap
+   on this button whenever a second vehicle was selected on a narrow viewport. */
+.icon-close { position: absolute; z-index: 5; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
 .link-btn { display: inline-block; margin-top: 6px; color: var(--accent); font-size: 14px; text-decoration: none; font-weight: 500; }
 
 /* API key gate */

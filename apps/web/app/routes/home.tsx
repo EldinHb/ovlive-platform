@@ -85,8 +85,10 @@ function MapApp() {
   // Route shape + the trip's scheduled stops. Fetched separately from `detail` because none of
   // it changes while the vehicle runs the trip, so it doesn't belong in the poll.
   const [trip, setTrip] = useState<VehicleTripPlan | null>(null);
-  // Bumped when the vehicle turns out to be on a different GTFS trip than the loaded plan.
-  const [tripGen, setTripGen] = useState(0);
+  // The trip id the loaded plan was *asked* for. Null before the first ask, so selecting a
+  // vehicle fetches the plan immediately (in parallel with the first poll) rather than a round
+  // trip later; set to the poll's trip id when the vehicle turns out to be on a different one.
+  const [planTrip, setPlanTrip] = useState<string | null>(null);
   const [following, setFollowing] = useState(false);
   // Bumped to force a detail refetch when nothing else in the deps changed (e.g. resuming
   // onto a vehicle's new trip, where the id — and thus activeId — stays the same).
@@ -166,14 +168,25 @@ function MapApp() {
       .then((p) => !ctrl.signal.aborted && setTrip(p))
       .catch(() => {});
     return () => ctrl.abort();
-  }, [activeId, rest, detailNonce, tripGen]);
+  }, [activeId, rest, detailNonce, planTrip]);
 
   // Refetch the plan when the vehicle moves onto a different trip than the one we loaded.
   // Only a *known* trip id counts: an unmatched vehicle reports null on every poll, and
   // treating that as a change would refetch the plan forever.
+  //
+  // The ask is keyed on the trip id the poll reported, not merely on the two disagreeing,
+  // because the two sides move at different rates: the plan answers for the vehicle's trip
+  // *now*, while `detail` is up to one poll (8 s) behind it. A trip change therefore leaves
+  // them legitimately mismatched for seconds, and re-asking until they agree spins — each
+  // answer re-arms the comparison, so it pulls the whole route shape once per round trip
+  // (measured ~15/s) until the poll catches up. Keyed this way it asks once per reported id,
+  // and a plan that can never match (a vehicle whose live trip has no GTFS match) settles.
   useEffect(() => {
-    if (detail?.trip_id && trip && trip.trip_id !== detail.trip_id) setTripGen((n) => n + 1);
-  }, [detail?.trip_id, trip]);
+    const reported = detail?.trip_id;
+    if (reported && trip && trip.trip_id !== reported && reported !== planTrip) {
+      setPlanTrip(reported);
+    }
+  }, [detail?.trip_id, trip, planTrip]);
 
   // Departure board for the open stop, polled so countdowns and live matches stay current.
   // 12 s: the board's realtime content is the trip delay of the vehicles running it, which
