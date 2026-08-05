@@ -76,6 +76,7 @@ const NL: Dict = {
   "action.removeSel": "Verwijderen uit selectie",
   "action.share": "Link delen",
   "action.copied": "Gekopieerd",
+  "action.resize": "Paneelhoogte aanpassen",
 };
 
 const EN: Dict = {
@@ -148,6 +149,7 @@ const EN: Dict = {
   "action.removeSel": "Remove from selection",
   "action.share": "Share link",
   "action.copied": "Copied",
+  "action.resize": "Resize panel",
 };
 
 const DICTS: Record<Lang, Dict> = { nl: NL, en: EN };
