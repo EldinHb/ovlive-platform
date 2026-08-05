@@ -2,6 +2,7 @@ import type { StopDeparture, StopDeparturesResponse } from "@ovlive/api-types";
 import { etaLabel, useNow } from "../lib/clock";
 import { etaSeconds, formatDelay, resolveOperator, secsToClock, typeKeyOf } from "../lib/format";
 import { useI18n } from "../lib/i18n";
+import { Sheet } from "./Sheet";
 
 interface Props {
   board: StopDeparturesResponse | null;
@@ -25,7 +26,7 @@ export function StopPanel({ board, loading, onSelectVehicle, onClose }: Props) {
   const [place, name] = splitStopName(stop?.name ?? "");
 
   return (
-    <aside className="vpanel panel">
+    <Sheet onClose={onClose}>
       <button className="icon-close" onClick={onClose} aria-label={t("action.close")}>✕</button>
 
       <div className="vpanel-head">
@@ -63,7 +64,7 @@ export function StopPanel({ board, loading, onSelectVehicle, onClose }: Props) {
           <div className="vpanel-sub stop-foot">{t("stop.liveHint")}</div>
         )}
       </div>
-    </aside>
+    </Sheet>
   );
 }
 

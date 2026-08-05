@@ -382,6 +382,17 @@ Consequences, so this isn't rediscovered the hard way:
   leaving the vehicle selection intact underneath, and opening one stops following so the camera
   isn't dragged off. Times are seconds-since-local-midnight, the same axis as the trip plan's
   stops.
+- **Both panels are the same shell, `Sheet` (`apps/web/app/components/Sheet.tsx`)**: the
+  right-hand dock on desktop, a bottom sheet on mobile that snaps to 32 / 56 / 92 vh. The height
+  is published as the `--sheet-h` custom property and consumed *only* inside the `max-width: 640px`
+  block — an inline `height` would outrank the desktop dock's `top`/`bottom` in the frame after
+  the viewport crosses the breakpoint. Dragging starts from the grip or the header always, and
+  from the scrolling body only when it is already at `scrollTop === 0` and the pull is downward,
+  or a flick meant to scroll the list back up would collapse the sheet instead. Mobile also
+  reflows `.vpanel-head` into a grid (badge beside destination-over-operator) and lets
+  `.follow-row` reclaim the close button's right padding: the header is the fixed cost of every
+  snap, and at 375px those two changes took it from 202 px to 113 px — over a third of the old
+  half-screen sheet was chrome.
 - `apps/mobile` (Expo, Phase 3) does not exist yet. `migrations/0001` reserves a `trip_history`
   table for Phase 4 that nothing writes to.
 - Comments explain *why* (feed quirks, policy, CPU trade-offs), not *what*. Match that: the

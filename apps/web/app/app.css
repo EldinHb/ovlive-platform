@@ -216,8 +216,11 @@ button { font-family: inherit; cursor: pointer; }
 .replacement-dest { font-size: 16px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .replacement-card .follow-chip { width: 100%; justify-content: center; }
 .vpanel-sub { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
-/* Only this region scrolls — the tabs + header stay put. */
-.vpanel-body { flex: 1 1 auto; min-height: 0; padding: 16px 18px; overflow-y: auto; }
+/* Only this region scrolls — the tabs + header stay put. `overscroll-behavior` keeps a flick
+   at either end from chaining to the page (and, on mobile, from fighting the sheet drag). */
+.vpanel-body { flex: 1 1 auto; min-height: 0; padding: 16px 18px; overflow-y: auto; overscroll-behavior: contain; }
+/* Drag surface for the mobile bottom sheet; there is nothing to resize on desktop. */
+.sheet-grip { display: none; }
 .follow-row { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 .follow-chip {
   /* Idle chips are transparent over a translucent panel, so the map shows through behind
@@ -341,7 +344,8 @@ button { font-family: inherit; cursor: pointer; }
 .dep-chevron { flex: none; color: var(--text-dim); font-size: 18px; }
 .stop-foot { margin-top: 14px; }
 
-.icon-close { position: absolute; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
+/* Above the sheet grip, whose hit strip runs the full width of the panel's top edge. */
+.icon-close { position: absolute; z-index: 3; top: 14px; right: 14px; border: 0; background: var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 50%; font-size: 15px; }
 .link-btn { display: inline-block; margin-top: 6px; color: var(--accent); font-size: 14px; text-decoration: none; font-weight: 500; }
 
 /* API key gate */
@@ -376,17 +380,55 @@ button { font-family: inherit; cursor: pointer; }
   /* The panel body already scrolls here; a second scroller inside it is unusable on touch. */
   .results-list { max-height: none; overflow-y: visible; }
 
-  /* Vehicle detail becomes a bottom sheet that leaves the top half of the map visible. */
+  /* Vehicle detail / departure board becomes a bottom sheet. Its height is the snap point
+     Sheet.tsx publishes as `--sheet-h`; the transition animates the snap, and `.dragging`
+     drops it so the sheet tracks the finger 1:1. */
   .vpanel {
     top: auto; left: 0; right: 0; bottom: 0; width: auto;
-    max-height: 50vh; border-radius: 20px 20px 0 0;
+    height: var(--sheet-h, 56vh); max-height: none; border-radius: 20px 20px 0 0;
     animation: slideup .3s cubic-bezier(.22, .61, .36, 1);
+    transition: height .28s cubic-bezier(.22, .61, .36, 1);
   }
-  .vpanel::before {
+  .vpanel.dragging { transition: none; }
+  /* A full-width strip so the pull works anywhere along the top edge, not just on the 40px bar. */
+  .sheet-grip {
+    display: block; position: absolute; top: 0; left: 0; right: 0; height: 24px; z-index: 2;
+    padding: 0; border: 0; background: transparent; touch-action: none;
+  }
+  .sheet-grip::before {
     content: ""; position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
     width: 40px; height: 5px; border-radius: 3px; background: var(--border);
   }
-  .vpanel-head { padding-top: 24px; }
+
+  /* The header is the fixed cost of every sheet height, so it gets compact here: the line
+     badge carries a two-line block (destination over operator + punctuality) instead of
+     stacking three full-width rows, which is what left the stop list with the smaller half. */
+  .vpanel-head {
+    display: grid; grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 10px; row-gap: 2px; align-items: center;
+    padding: 22px 46px 10px 14px;
+  }
+  .vpanel-line { grid-row: 1 / 3; grid-column: 1; min-width: 34px; height: 34px; font-size: 16px; padding: 0 9px; }
+  .vpanel-dest { grid-row: 1; grid-column: 2; margin-top: 0; font-size: 16px; }
+  .vpanel-title { display: contents; }
+  .vpanel-meta { grid-row: 2; grid-column: 2; flex-direction: row; align-items: center; gap: 8px; }
+  .vpanel-meta .vpanel-sub { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .delay-badge { flex: none; padding: 1px 8px; font-size: 12px; }
+  /* Only the title row sits under the close button, so the chips reclaim that right padding —
+     the three of them wrap to a second row without it, doubling what the header costs. */
+  .follow-row { grid-row: 3; grid-column: 1 / -1; margin: 10px -32px 0 0; gap: 6px; }
+  .follow-chip { padding: 6px 11px; font-size: 12px; gap: 5px; }
+
+  .vpanel-body { padding: 12px 14px; }
+  /* Clear of the grip's hit strip, and above it, so tapping a tab isn't read as a sheet drag. */
+  .vtabs { position: relative; z-index: 3; padding: 28px 46px 0 12px; }
+  .vtabs + .vpanel-head { padding-top: 10px; }
+
+  /* Stop board header: same budget as the vehicle one. It is the head's only child, so it
+     spans both columns of the grid the vehicle header needs. */
+  .stop-head { grid-column: 1 / -1; align-items: center; gap: 10px; padding-right: 0; }
+  .stop-title { font-size: 17px; }
+  .stop-pin { font-size: 17px; }
 }
 
 @keyframes slideup { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }

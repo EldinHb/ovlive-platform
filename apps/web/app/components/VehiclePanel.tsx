@@ -13,6 +13,7 @@ import {
 } from "../lib/format";
 import { expectedTime, upcomingStops } from "../lib/trip";
 import { useI18n, type TFn } from "../lib/i18n";
+import { Sheet } from "./Sheet";
 
 /** Shareable deep link to a vehicle: current page + `?v=<id>`. */
 function vehicleShareUrl(id: string): string {
@@ -229,8 +230,8 @@ export function VehiclePanel({
   }
 
   return (
-    <aside
-      className="vpanel panel"
+    <Sheet
+      onClose={onClose}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -407,6 +408,6 @@ export function VehiclePanel({
         </ul>
       </div>
       )}
-    </aside>
+    </Sheet>
   );
 }
