@@ -20,6 +20,58 @@ function vehicleShareUrl(id: string): string {
   return `${location.origin}${location.pathname}?v=${encodeURIComponent(id)}`;
 }
 
+/**
+ * The header chips carry icons because on mobile their labels are visually hidden
+ * (`.vpanel-head` in the `max-width: 640px` block): three labelled chips wrap to a second row, and the
+ * header is the fixed cost of every sheet snap. The icon has to say what the label did,
+ * so these are the conventional ones — crosshair for tracking, funnel for narrowing the
+ * map down to one vehicle, chain link for the copyable URL — sized to sit on the text
+ * baseline at 15px.
+ */
+function ChipIcon({ children, filled = false }: { children: React.ReactNode; filled?: boolean }) {
+  return (
+    <svg
+      className="chip-icon"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
+const IconFollow = (
+  <ChipIcon>
+    <circle cx="12" cy="12" r="7" />
+    <path d="M12 2.4v3.1M12 18.5v3.1M2.4 12h3.1M18.5 12h3.1" />
+    <circle className="chip-icon-dot" cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+  </ChipIcon>
+);
+const IconIsolate = (filled: boolean) => (
+  <ChipIcon filled={filled}>
+    <path d="M3.6 5h16.8l-6.7 7.7v5.7l-3.4 2.1v-7.8L3.6 5Z" />
+  </ChipIcon>
+);
+const IconShare = (
+  <ChipIcon>
+    <path d="M10.2 13.8a4.2 4.2 0 0 0 6 0l2.4-2.4a4.2 4.2 0 0 0-6-6l-1.2 1.2" />
+    <path d="M13.8 10.2a4.2 4.2 0 0 0-6 0l-2.4 2.4a4.2 4.2 0 0 0 6 6l1.2-1.2" />
+  </ChipIcon>
+);
+const IconCheck = (
+  <ChipIcon>
+    <path d="M4.8 12.6 9.6 17.4 19.2 6.8" />
+  </ChipIcon>
+);
+
 /** A chip that copies a deep link to the active vehicle, briefly confirming "Copied". */
 function ShareButton({ id, t }: { id: string; t: TFn }) {
   const [copied, setCopied] = useState(false);
@@ -45,13 +97,15 @@ function ShareButton({ id, t }: { id: string; t: TFn }) {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), 1600);
   }
+  const label = copied ? t("action.copied") : t("action.share");
   return (
     <button
       className={`follow-chip ${copied ? "active" : ""}`}
       onClick={copy}
-      title={t("action.share")}
+      title={label}
     >
-      {copied ? `✓ ${t("action.copied")}` : `🔗 ${t("action.share")}`}
+      {copied ? IconCheck : IconShare}
+      <span className="chip-label">{label}</span>
     </button>
   );
 }
@@ -286,10 +340,18 @@ export function VehiclePanel({
           <div className="follow-row">
             {following ? (
               <span className="follow-chip live" title={t("follow.following")}>
-                <span className="live-dot" /> {t("follow.following")}
+                {IconFollow}
+                <span className="chip-label">{t("follow.following")}</span>
               </span>
             ) : (
-              <button className="follow-chip" onClick={onFollow}>◎ {t("follow.follow")}</button>
+              <button
+                className="follow-chip"
+                onClick={onFollow}
+                title={t("follow.follow")}
+              >
+                {IconFollow}
+                <span className="chip-label">{t("follow.follow")}</span>
+              </button>
             )}
             <button
               className={`follow-chip ${isolate ? "active" : ""}`}
@@ -297,7 +359,8 @@ export function VehiclePanel({
               onClick={onToggleIsolate}
               title={isolate ? t("isolate.showAll") : t("isolate.only")}
             >
-              {isolate ? `◉ ${t("isolate.showAll")}` : `○ ${t("isolate.only")}`}
+              {IconIsolate(isolate)}
+              <span className="chip-label">{isolate ? t("isolate.showAll") : t("isolate.only")}</span>
             </button>
             <ShareButton id={id} t={t} />
           </div>
