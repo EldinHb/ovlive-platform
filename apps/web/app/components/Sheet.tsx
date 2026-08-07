@@ -63,6 +63,28 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
     active: boolean;
     scroller: HTMLElement | null;
   } | null>(null);
+  /** Set when a drag just ended, so the grip's trailing click doesn't also cycle the snap. */
+  const suppressClick = useRef(false);
+
+  // Pointer events cannot cancel native scrolling, so a pull the drag logic claims (from a
+  // body at scrollTop 0, or from anywhere that isn't the scroller) was ALSO a page pan to the
+  // browser — `.vpanel`'s `touch-action: pan-y` allows it — and a page that can't scroll
+  // turns that pan into pull-to-refresh. Kill the native gesture from the first touchmove
+  // whenever the sheet would take the drag; a listed body that is actually scrolling keeps
+  // its native scroll (drag.current is cleared for it in pointerMove). Non-passive on
+  // purpose: preventDefault is the whole point, so React's synthetic handlers can't do it.
+  useEffect(() => {
+    const el = ref.current;
+    if (!mobile || !el) return;
+    const onTouchMove = (e: TouchEvent) => {
+      const d = drag.current;
+      if (!d || e.touches.length !== 1) return;
+      const dy = e.touches[0].clientY - d.y;
+      if (!d.scroller || d.active || (d.scroller.scrollTop <= 0 && dy > 0)) e.preventDefault();
+    };
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    return () => el.removeEventListener("touchmove", onTouchMove);
+  }, [mobile]);
 
   // Back to the default height whenever the sheet stops being a sheet, so returning to a
   // narrow window doesn't restore a height the user set for a different layout.
@@ -76,6 +98,9 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
 
   function pointerDown(e: React.PointerEvent) {
     onPointerDown?.(e);
+    // A drag that ends off the grip leaves the flag set; a fresh touch must start clean or the
+    // next genuine grip tap would be swallowed.
+    suppressClick.current = false;
     const el = ref.current;
     if (!mobile || !el) return;
     const target = e.target as HTMLElement;
@@ -115,6 +140,18 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
     setDragH(Math.min(Math.max(d.h - dy, dismissPx()), snapPx(SNAPS.length - 1)));
   }
 
+  /**
+   * The browser cancels the pointer when an OS gesture takes over — most often the finger
+   * crossing the top screen edge mid-drag. Committing the in-flight height there snapped the
+   * sheet to max on every accidental edge hit, so a cancel reverts to the last settled snap.
+   */
+  function pointerCancel(e: React.PointerEvent) {
+    onPointerUp?.(e);
+    if (drag.current?.active) suppressClick.current = true;
+    drag.current = null;
+    setDragH(null);
+  }
+
   function pointerUp(e: React.PointerEvent) {
     onPointerUp?.(e);
     const d = drag.current;
@@ -122,6 +159,9 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
     const h = dragH;
     setDragH(null);
     if (!d?.active || h == null) return;
+    // The grip is a button, so a drag that started on it still fires a click on release —
+    // which would cycle the snap on top of the one the drag just chose.
+    suppressClick.current = true;
     if (h < dismissPx() + 1) {
       onClose();
       return;
@@ -136,6 +176,10 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
 
   /** Tapping the grip steps up through the snaps, then wraps back to the smallest. */
   function cycle() {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
     setSnap((s) => (s >= SNAPS.length - 1 ? 0 : s + 1));
   }
 
@@ -150,7 +194,7 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
       onPointerDown={pointerDown}
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}
-      onPointerCancel={pointerUp}
+      onPointerCancel={pointerCancel}
     >
       <button className="sheet-grip" onClick={cycle} aria-label={t("action.resize")} />
       {children}
