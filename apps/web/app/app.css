@@ -414,6 +414,9 @@ button { font-family: inherit; cursor: pointer; }
     display: grid; grid-template-columns: auto minmax(0, 1fr);
     column-gap: 10px; row-gap: 2px; align-items: center;
     padding: 22px 46px 10px 14px;
+    /* The header is a sheet-drag surface, never a scroller: without this the panel's pan-y
+       lets the browser treat a downward pull here as a page pan → pull-to-refresh. */
+    touch-action: none;
   }
   .vpanel-line { grid-row: 1 / 3; grid-column: 1; min-width: 34px; height: 34px; font-size: 16px; padding: 0 9px; }
   .vpanel-dest { grid-row: 1; grid-column: 2; margin-top: 0; font-size: 16px; }
