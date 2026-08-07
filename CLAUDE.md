@@ -47,6 +47,12 @@ DATA_DIR=./data RUST_LOG=info,ovlive=debug ./target/debug/ovlive-server
 Postgres must be reachable (migrations + admin seed run at boot, or startup fails). Check the
 actual published port — a `docker ps` container named `ovlive-pg` has been mapped to **5434**
 on this machine, and hitting 5432 yields a misleading "password authentication failed".
+
+**From a worktree, `DATA_DIR` and `.env` must point at the main checkout.** Both are untracked,
+so `.claude/worktrees/*/` has neither, and `DATA_DIR=./data` there is a cache-cold boot that
+**downloads the 232 MiB feed** — the never-re-download rule below, broken silently (it looks
+like a slow boot, not an error). Likewise `pkill -f 'react-router dev'` / `-f ovlive-server`
+match every sibling worktree; kill by port instead. See `.claude/skills/run/SKILL.md`.
 With `data/*.snap` present the server boots from snapshots (no GTFS download) in ~15 s and
 serves `http://0.0.0.0:8080`, docs at `/docs`.
 

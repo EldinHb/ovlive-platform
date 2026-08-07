@@ -32,12 +32,19 @@ parentheses, so `source .env` breaks the shell. Extract that one value and pass 
 
 ```bash
 cargo build -p ovlive-server
-export GTFS_USER_AGENT="$(sed -n 's/^GTFS_USER_AGENT=//p' .env | head -1)"
+export GTFS_USER_AGENT="$(sed -n 's/^GTFS_USER_AGENT=//p' /Users/eldin/Projects/Ovlive/.env | head -1)"
 DATABASE_URL=postgres://ovlive:ovlive@localhost:5434/ovlive \
-BIND_ADDR=0.0.0.0:8080 DATA_DIR=./data RUST_LOG=info,ovlive=debug \
+BIND_ADDR=0.0.0.0:8080 DATA_DIR=/Users/eldin/Projects/Ovlive/data RUST_LOG=info,ovlive=debug \
 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=admin \
 ./target/debug/ovlive-server > /tmp/ovlive-server.log 2>&1 &
 ```
+
+**In a worktree, point `DATA_DIR` and `.env` at the main checkout** — both are untracked, so
+`.claude/worktrees/*/` has neither. `DATA_DIR=./data` there creates an empty directory, and an
+empty one is a cache-cold boot: no snapshot, no `gtfs-nl.zip`, so the server **downloads the
+232 MiB feed**. That is the one thing the data-source policy exists to prevent, and it happens
+silently — the failure mode is a slow boot, not an error. Worktrees sharing one `data/` is
+fine; only one server may run at a time anyway (see §6).
 
 `GTFS_USER_AGENT` is required — the server exits with a named error if it is empty, which is
 what you'll see if `.env` is missing (`cp .env.example .env` and set your own contact address).
@@ -72,12 +79,24 @@ pnpm install                                    # only if node_modules is stale
 pnpm --filter @ovlive/web run dev > /tmp/ovlive-web.log 2>&1 &
 ```
 
-**Read the actual port out of the log** — Vite silently falls back to 5174, 5175… when
-5173 is taken (a stray `react-router dev` from an earlier session is the usual cause,
-`lsof -nP -iTCP:5173 -sTCP:LISTEN`):
+**Read the actual port out of the log** — Vite silently falls back to 5174, 5175… when 5173
+is taken:
 
 ```bash
 grep -oE 'http://localhost:[0-9]+' /tmp/ovlive-web.log | head -1
+```
+
+**Landing on 5176+ does not mean OVLive is already running three times.** On this machine the
+5173–5175 range is routinely held by *other* repos — `~/Work/situation-room` runs a `turbo dev`
+stack per worktree, two of which were up during the 2026-08-07 session. Resolve every port to
+its owner before concluding anything, and note that OVLive is a `react-router dev` while
+situation-room is a bare `vite dev`:
+
+```bash
+for p in 5173 5174 5175 5176 8080; do
+  pid=$(lsof -nP -iTCP:$p -sTCP:LISTEN -t 2>/dev/null)
+  [ -n "$pid" ] && echo "$p -> $(ps -o command= -p $pid | cut -c1-90)" || echo "$p free"
+done
 ```
 
 The SPA reaches the backend directly at `VITE_API_BASE`, default `http://127.0.0.1:8080`
@@ -157,10 +176,19 @@ does not exist (SSR is off) — a 404 there is expected, not a failure.
 
 ## 6. Shut down
 
+Kill by port, not by pattern — resolve the PID first:
+
 ```bash
-pkill -f 'target/debug/ovlive-server'
-pkill -f 'react-router dev'
+kill $(lsof -nP -iTCP:8080 -sTCP:LISTEN -t)   # backend
+kill $(lsof -nP -iTCP:5173 -sTCP:LISTEN -t)   # the frontend you started
 ```
+
+**Do not `pkill -f 'react-router dev'`.** There are several OVLive worktrees under
+`.claude/worktrees/`, all matching that pattern, so it kills every sibling's dev server —
+including one a person or another session is using. That is how the 2026-08-07 session took
+out a frontend on 5173 it had not started. The same applies to
+`pkill -f 'target/debug/ovlive-server'`, which additionally matters because the survivor's
+ZMQ subscriptions are the fair-use budget.
 
 **Fair use — this matters.** Exactly one ZMQ SUB connection per NDOV datastream per
 process. The server holds all three (KV6 `:7658`, KV78 `:7817`, NS InfoPlus `:7664`), so
@@ -186,5 +214,6 @@ cargo run --release --example validate_feed -p ovlive-gtfs   # ~8 s, no network
 | Every train says "on time" | `delay_known` is being ignored somewhere: unknown and on-time are both `delay_seconds: 0` |
 | `live_vehicles: 0` | ZMQ not delivering; check `subscribed stream=` lines and the idle watchdog (`ZMQ_IDLE_TIMEOUT_SECS`) |
 | SPA loads, map empty | Backend down or `VITE_API_BASE` wrong — check the browser's WS to `:8080/v1/stream` |
-| Vite on an unexpected port | 5173 taken by a stray dev server; read the port from the log |
+| Vite on an unexpected port | 5173–5175 taken — usually by another *repo* (see §3), not a stray OVLive one; read the port from the log |
+| Backend downloads the feed in a worktree | `DATA_DIR=./data` resolved to the worktree's empty dir — point it at the main checkout (§2) |
 | `just run` fails | It uses `set dotenv-load`, so it inherits `.env`'s wrong DB port. Prefer the explicit invocation above |
