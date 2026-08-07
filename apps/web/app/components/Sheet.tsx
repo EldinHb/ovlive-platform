@@ -45,9 +45,10 @@ interface Props {
  * content it holds (a stop list that can run to dozens of rows) is the reason the panel is
  * open, and a fixed half-screen sheet gives most of the phone to the map instead.
  *
- * The gesture starts from the grip or the header at any time, and from the scrolling body only
- * when that body is already at the top and the pull is downward — otherwise a downward flick
- * meant to scroll the list back up would collapse the sheet instead.
+ * The gesture starts from the grip or the header only. The scrolling body is never a drag
+ * surface — a pull inside the list is always a scroll (or, at the top edge, nothing), so the
+ * sheet can't collapse under a finger that was aiming at the arrival times. The body is still
+ * tracked, but only so the touchmove handler below can suppress pull-to-refresh at its edge.
  */
 export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPointerUp }: Props) {
   const { t } = useI18n();
@@ -66,13 +67,13 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
   /** Set when a drag just ended, so the grip's trailing click doesn't also cycle the snap. */
   const suppressClick = useRef(false);
 
-  // Pointer events cannot cancel native scrolling, so a pull the drag logic claims (from a
-  // body at scrollTop 0, or from anywhere that isn't the scroller) was ALSO a page pan to the
-  // browser — `.vpanel`'s `touch-action: pan-y` allows it — and a page that can't scroll
-  // turns that pan into pull-to-refresh. Kill the native gesture from the first touchmove
-  // whenever the sheet would take the drag; a listed body that is actually scrolling keeps
-  // its native scroll (drag.current is cleared for it in pointerMove). Non-passive on
-  // purpose: preventDefault is the whole point, so React's synthetic handlers can't do it.
+  // Pointer events cannot cancel native scrolling, so a grip/header drag, or a body pull that
+  // the body cannot absorb (it is already at scrollTop 0), was ALSO a page pan to the browser —
+  // `.vpanel`'s `touch-action: pan-y` allows it — and a page that can't scroll turns that pan
+  // into pull-to-refresh. Kill the native gesture from the first touchmove in exactly those
+  // cases; a body that is actually scrolling keeps its native scroll (the browser's
+  // pointercancel clears drag.current for it). Non-passive on purpose: preventDefault is the
+  // whole point, so React's synthetic handlers can't do it.
   useEffect(() => {
     const el = ref.current;
     if (!mobile || !el) return;
@@ -104,8 +105,12 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
     const el = ref.current;
     if (!mobile || !el) return;
     const target = e.target as HTMLElement;
-    // Controls keep their own gestures; the grip is a button but is the drag surface itself.
-    if (!target.closest(".sheet-grip") && target.closest("button, a, input")) {
+    const scroller = target.closest<HTMLElement>(".vpanel-body");
+    // Header controls keep their own gestures; the grip is a button but is the drag surface
+    // itself. Controls inside the body are still tracked — the body never drags the sheet, so
+    // recording the scroller only arms the pull-to-refresh suppression, and their clicks are
+    // untouched (the stop panel's departure rows are buttons).
+    if (!scroller && !target.closest(".sheet-grip") && target.closest("button, a, input")) {
       drag.current = null;
       return;
     }
@@ -114,7 +119,7 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
       y: e.clientY,
       h: el.getBoundingClientRect().height,
       active: false,
-      scroller: target.closest<HTMLElement>(".vpanel-body"),
+      scroller,
     };
   }
 
@@ -125,11 +130,11 @@ export function Sheet({ children, onClose, onPointerDown, onPointerMove, onPoint
     if (!d || !el) return;
     const dy = e.clientY - d.y;
     if (!d.active) {
+      // The body never drags the sheet — its pulls scroll the list, and its edge pulls are
+      // absorbed by the touchmove handler above. drag.current stays set so that handler can
+      // keep watching the scroller's edge for the rest of the gesture.
+      if (d.scroller) return;
       if (Math.abs(dy) < DRAG_SLOP || Math.abs(dy) <= Math.abs(e.clientX - d.x)) return;
-      if (d.scroller && !(d.scroller.scrollTop <= 0 && dy > 0)) {
-        drag.current = null; // the list is scrolling; leave it alone
-        return;
-      }
       d.active = true;
       // Throws NotFoundError if the pointer is already gone; the drag still works without it.
       try {
