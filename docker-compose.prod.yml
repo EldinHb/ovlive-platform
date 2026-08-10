@@ -51,7 +51,7 @@ services:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX must be set, e.g. ghcr.io/your-github-username}/ovlive-platform-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # Fair use: exactly one ZMQ SUB connection per NDOV datastream, per process. This service
-    # holds all three (KV6, KV78Turbo, NS InfoPlus), so it must never be scaled past 1 replica
+    # holds both (KV6, NS InfoPlus), so it must never be scaled past 1 replica
     # — two containers means two subscriptions and risks the project being blocked upstream.
     deploy:
       replicas: 1
@@ -76,8 +76,6 @@ services:
 
       # --- Realtime feeds ---
       ZMQ_KV6_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7658
-      ZMQ_KV78_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7817
-      ZMQ_KV78_TOPICS: /GOVI/KV8passtimes/
       ZMQ_NS_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7664
       ZMQ_IDLE_TIMEOUT_SECS: "60"
 

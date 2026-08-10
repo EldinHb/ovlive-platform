@@ -62,7 +62,7 @@ tail -15 /tmp/ovlive-server.log
 
 A healthy boot logs, in order: `GTFS feed loaded (routes=3195 trips=~1.04M …)` →
 `restored GTFS from parsed snapshot (no download)` → `stop indexes built for <today>` →
-`subscribed stream=KV78Turbo` / `stream=KV6` / `stream=NS InfoPlus` (the last with
+`subscribed stream=KV6` / `stream=NS InfoPlus` (the latter with
 `topics=["/RIG/NStreinpositiesInterface5", "/RIG/InfoPlusRITInterface5"]`) →
 `listening on http://0.0.0.0:8080`.
 
@@ -191,9 +191,9 @@ out a frontend on 5173 it had not started. The same applies to
 ZMQ subscriptions are the fair-use budget.
 
 **Fair use — this matters.** Exactly one ZMQ SUB connection per NDOV datastream per
-process. The server holds all three (KV6 `:7658`, KV78 `:7817`, NS InfoPlus `:7664`), so
+process. The server holds both (KV6 `:7658`, NS InfoPlus `:7664`), so
 **stop the server before running any sampler in `crates/realtime/examples/`**
-(`kv78listen`, `nextlinelive`, `nslisten`, `nsdelay`) and never run two servers at once.
+(`nslisten`, `nsdelay`) and never run two servers at once.
 Note `:7664` counts as one datastream even though we subscribe to two envelopes on it — that
 is why positions and RitInfo share a single connection.
 

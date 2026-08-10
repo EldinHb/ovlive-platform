@@ -249,16 +249,6 @@ button { font-family: inherit; cursor: pointer; }
 /* Unknown punctuality reads as neutral/muted — deliberately not the green "on time" pill,
    which would assert what we don't know (see formatDelay). */
 .delay-unknown { background: rgba(127,140,152,.15); color: var(--text-dim); }
-/* Predicted next line (block/omloop chaining) — sits above the upcoming-stops list. */
-.next-trip {
-  margin: 0 0 18px; padding: 12px 14px; border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-}
-.next-trip-label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
-.next-trip-row { display: flex; align-items: center; gap: 10px; }
-.next-trip-dest { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.next-trip-time { margin-left: auto; color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin: 4px 0 18px; }
 .meta-grid .k { font-size: 12px; color: var(--text-dim); }
 .meta-grid .v { font-size: 15px; font-weight: 500; }

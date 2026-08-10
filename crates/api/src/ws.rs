@@ -18,7 +18,7 @@ use prost::Message as _;
 use tracing::debug;
 
 use crate::auth::OptionalApiKeyUser;
-use crate::convert::{pb_filters_to_core, pb_viewport_to_bbox, predict_next, to_move, to_state};
+use crate::convert::{pb_filters_to_core, pb_viewport_to_bbox, to_move, to_state};
 use crate::state::AppState;
 
 pub async fn ws_handler(
@@ -153,7 +153,7 @@ fn build_update(sub: &mut Subscription, state: &AppState) -> Option<Vec<u8>> {
         let now = Sent { lat: t.lat, lon: t.lon, delay: t.delay_seconds, at_stop: t.at_stop };
         match sub.sent.get(&t.id) {
             None => {
-                entered.push(to_state(t, predict_next(&state.blocks, t)));
+                entered.push(to_state(t));
                 sub.sent.insert(t.id.clone(), now);
             }
             Some(prev) if changed(prev, t.lat, t.lon, t.delay_seconds, t.at_stop) => {
@@ -177,7 +177,7 @@ fn build_update(sub: &mut Subscription, state: &AppState) -> Option<Vec<u8>> {
             let now = Sent { lat: t.lat, lon: t.lon, delay: t.delay_seconds, at_stop: t.at_stop };
             match sub.sent.get(&t.id) {
                 None => {
-                    entered.push(to_state(t, predict_next(&state.blocks, t)));
+                    entered.push(to_state(t));
                     sub.sent.insert(t.id.clone(), now);
                 }
                 Some(prev) if changed(prev, t.lat, t.lon, t.delay_seconds, t.at_stop) => {

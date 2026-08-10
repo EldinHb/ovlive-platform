@@ -1,6 +1,6 @@
 //! Conversions between the core domain and the protobuf wire types.
 
-use ovlive_core::{BBox, Filters, LiveTrip, NextTrip, VehicleType as CoreType};
+use ovlive_core::{BBox, Filters, LiveTrip, VehicleType as CoreType};
 use ovlive_proto::v1 as pb;
 
 pub fn core_type_to_pb(t: CoreType) -> i32 {
@@ -26,12 +26,7 @@ pub fn pb_type_to_core(v: i32) -> Option<CoreType> {
     }
 }
 
-pub fn to_state(t: &LiveTrip, next: Option<NextTrip>) -> pb::VehicleState {
-    let next = next.unwrap_or_else(|| NextTrip {
-        line_public_number: String::new(),
-        destination: String::new(),
-        start: chrono::DateTime::UNIX_EPOCH,
-    });
+pub fn to_state(t: &LiveTrip) -> pb::VehicleState {
     pb::VehicleState {
         id: t.id.clone(),
         dataowner: t.key.dataowner.clone(),
@@ -51,22 +46,7 @@ pub fn to_state(t: &LiveTrip, next: Option<NextTrip>) -> pb::VehicleState {
         current_stop_id: t.current_stop_id.clone().unwrap_or_default(),
         line_color: t.line_color.clone().unwrap_or_default(),
         line_text_color: t.line_text_color.clone().unwrap_or_default(),
-        next_line_public_number: next.line_public_number,
-        next_destination: next.destination,
-        next_start_unix: if next.start == chrono::DateTime::UNIX_EPOCH { 0 } else { next.start.timestamp() },
     }
-}
-
-/// Predict the next line for a live trip. The block is resolved from the KV78 index via the
-/// journey, with the vehicle's live KV6 `block_code` as a fallback (see `BlockStore::predict_next`).
-pub fn predict_next(blocks: &ovlive_core::BlockStore, t: &LiveTrip) -> Option<NextTrip> {
-    blocks.predict_next(
-        &t.key.dataowner,
-        t.block_code.as_deref().unwrap_or(""),
-        t.line_planning_number.as_deref().unwrap_or(""),
-        t.journey_number.as_deref().unwrap_or(""),
-        chrono::Utc::now(),
-    )
 }
 
 pub fn to_move(t: &LiveTrip) -> pb::VehicleMove {

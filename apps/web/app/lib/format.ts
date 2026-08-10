@@ -176,16 +176,6 @@ export function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: n
   return 111_320 * Math.sqrt(dlat * dlat + dlon * dlon);
 }
 
-/** Unix seconds -> "HH:MM" in Dutch local time (matches the schedule clock). "" if 0. */
-export function unixToClock(unix: number): string {
-  if (!unix) return "";
-  return new Intl.DateTimeFormat("nl-NL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/Amsterdam",
-  }).format(new Date(unix * 1000));
-}
-
 /** How stale a vehicle's last position fix is, for colouring the freshness indicator. */
 export type Freshness = "fresh" | "aging" | "stale";
 

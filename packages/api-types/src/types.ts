@@ -53,12 +53,6 @@ export interface Vehicle {
   /** GTFS line colours (6-hex, no '#'); "" when the line has none. */
   lineColor: string;
   lineTextColor: string;
-  /** Predicted next public line this vehicle becomes (block/omloop chaining); "" if unknown. */
-  nextLine: string;
-  /** Destination of the predicted next trip; "" if unknown. */
-  nextDestination: string;
-  /** Start of the predicted next trip (unix seconds); 0 if unknown. */
-  nextStart: number;
 }
 
 /** Lightweight position delta (from MOVE). */
@@ -179,12 +173,6 @@ export interface VehicleDetail {
   vehicle: VehicleSummary;
   /** Matched GTFS trip; null when unmatched. Refetch the trip plan when this changes. */
   trip_id: string | null;
-  /** Predicted next trip for this vehicle (block/omloop chaining); null if unknown. */
-  next_trip: {
-    line_public_number: string;
-    destination: string;
-    start_unix: number;
-  } | null;
 }
 
 /**

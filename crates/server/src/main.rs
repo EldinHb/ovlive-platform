@@ -9,12 +9,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use config::Config;
-use ovlive_core::{BlockSnapshot, BlockStore, LiveState, LiveTrip, TrainDelaySnapshot, TrainDelays};
+use ovlive_core::{LiveState, LiveTrip, TrainDelaySnapshot, TrainDelays};
 use ovlive_gtfs::{
     load_and_swap, refresh_once, seconds_until_next, FeedMeta, GtfsConfig, GtfsService, GtfsStore,
 };
 use ovlive_persist::{snapshot, Db};
-use ovlive_realtime::{run_infoplus_stream, run_journey_stream, run_stream, StreamConfig, StreamKind};
+use ovlive_realtime::{run_infoplus_stream, run_stream, StreamConfig, StreamKind};
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -23,7 +23,6 @@ const GTFS_SNAP: &str = "gtfs.snap";
 const GTFS_META: &str = "gtfs_meta.bin";
 const GTFS_ZIP: &str = "gtfs-nl.zip";
 const RT_SNAP: &str = "realtime.snap";
-const BLOCK_SNAP: &str = "blocks.snap";
 const TRAIN_SNAP: &str = "train_delays.snap";
 
 #[tokio::main]
@@ -137,61 +136,6 @@ async fn main() -> Result<()> {
         });
     }
 
-    // --- KV78Turbo ingestion -> block index (next-line prediction) ---
-    let blocks = Arc::new(BlockStore::new());
-    if cfg.zmq_kv78_enabled {
-        // Restore the block index so predictions work immediately (before the feed refills).
-        if let Ok(Some(snap)) = snapshot::load::<BlockSnapshot>(&snapshot::path_in(&data_dir, BLOCK_SNAP)) {
-            blocks.restore(snap);
-            let cutoff = Utc::now() - chrono::Duration::seconds(cfg.block_prune_secs);
-            let pruned = blocks.prune(cutoff);
-            info!("restored block index: {} journeys ({} pruned as stale)", blocks.len(), pruned);
-        }
-
-        let (j_tx, mut j_rx) = mpsc::channel(50_000);
-        tokio::spawn(run_journey_stream(
-            StreamConfig {
-                name: "KV78Turbo".into(),
-                endpoint: cfg.zmq_kv78_endpoint.clone(),
-                kind: StreamKind::Kv78Turbo,
-                topics: cfg.zmq_kv78_topics.clone(),
-                idle_timeout: Duration::from_secs(cfg.zmq_idle_timeout_secs),
-                max_fix_age: Duration::from_secs(cfg.ns_max_fix_age_secs),
-            },
-            j_tx,
-        ));
-        let blocks_ing = blocks.clone();
-        tokio::spawn(async move {
-            while let Some(u) = j_rx.recv().await {
-                blocks_ing.apply(u, Utc::now());
-            }
-        });
-        // Prune journeys that have rolled off the KV78Turbo horizon, then snapshot the index.
-        let blocks_prune = blocks.clone();
-        let prune_secs = cfg.block_prune_secs;
-        let block_dir = data_dir.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                let cutoff = Utc::now() - chrono::Duration::seconds(prune_secs);
-                let removed = blocks_prune.prune(cutoff);
-                if removed > 0 {
-                    tracing::debug!("pruned {} stale journeys ({} left)", removed, blocks_prune.len());
-                }
-                let path = snapshot::path_in(&block_dir, BLOCK_SNAP);
-                let snap = blocks_prune.snapshot();
-                match tokio::task::spawn_blocking(move || snapshot::save(&path, &snap)).await {
-                    Ok(Ok(())) => tracing::debug!("block index: {} journeys snapshotted", blocks_prune.len()),
-                    Ok(Err(e)) => warn!("block snapshot save failed: {e}"),
-                    Err(e) => warn!("block snapshot task panicked: {e}"),
-                }
-            }
-        });
-    } else {
-        info!("KV78Turbo disabled; next-line prediction unavailable");
-    }
-
     // --- Tick loop: publish spatial index, prune stale, snapshot realtime ---
     let (index_tx, index_rx) = watch::channel(live.build_index());
     spawn_tick_loop(live.clone(), index_tx, &cfg, data_dir.clone());
@@ -200,7 +144,6 @@ async fn main() -> Result<()> {
     let state = ovlive_api::AppState {
         live: live.clone(),
         gtfs: gtfs.clone(),
-        blocks: blocks.clone(),
         db,
         index_rx,
         limits: ovlive_api::RateLimits::new(cfg.public_rate_per_min, cfg.user_rate_per_min),

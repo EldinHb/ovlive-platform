@@ -58,11 +58,10 @@ serves `http://0.0.0.0:8080`, docs at `/docs`.
 
 ### Diagnostic examples
 
-`crates/realtime/examples/` holds throwaway live-feed samplers (`kv78listen.rs` and
-`nslisten.rs` write Markdown reports to `data/`; `nextlinelive.rs` prints live predictions).
-**Fair use: exactly one SUB connection per NDOV datastream — stop the server before running
-one.** `nslisten.rs` dumps a raw NS treinposities message plus an element census, which is how
-the train wire format below was established.
+`crates/realtime/examples/` holds throwaway live-feed samplers (`nslisten.rs` writes a
+Markdown report to `data/`). **Fair use: exactly one SUB connection per NDOV datastream —
+stop the server before running one.** `nslisten.rs` dumps a raw NS treinposities message plus
+an element census, which is how the train wire format below was established.
 
 `crates/gtfs/examples/validate_feed.rs` needs **no network**: it parses the cached
 `data/gtfs-nl.zip`, prints the counts the parser and stop indexes depend on, and asserts the
@@ -94,8 +93,8 @@ The feeds are free, best-effort, community-run. Being a bad citizen gets the pro
   Parser changes must be validated against the cached zip, never by re-fetching.
 - **Never buffer the archive in memory.** It is streamed to a `.part` file and atomically
   renamed; `stop_times.txt` is parsed by streaming the CSV out of the zip entry.
-- **One ZMQ SUB connection per stream, per process.** KV6 (`:7658`), KV78Turbo (`:7817`) and
-  NS InfoPlus (`:7664`) get one each. Reconnects use capped exponential backoff plus an idle
+- **One ZMQ SUB connection per stream, per process.** KV6 (`:7658`) and NS InfoPlus
+  (`:7664`) get one each. Reconnects use capped exponential backoff plus an idle
   watchdog. Port 7664 carries ten InfoPlus envelopes; we subscribe only to
   `/RIG/NStreinpositiesInterface5` so the other nine never hit the socket.
 - Data is attributed to the operators via OVapi / NDOV Loket; OVLive is independent, no SLA.
@@ -108,7 +107,6 @@ Postgres holds **only** accounts and API keys — never vehicle data.
 ```
 NDOV ZMQ KV6  (:7658, gzip XML)   → parse_kv6  → PosEvent      → LiveState (DashMap by vehicle)
 NDOV ZMQ NS   (:7664, gzip XML)   → parse_ns   → PosEvent      ↗  (trains; not in KV6)
-NDOV ZMQ KV78 (:7817, gzip pipes) → parse_kv78 → JourneyUpdate → BlockStore (next-line index)
 OVapi gtfs-nl.zip (daily, 304-aware) → GtfsStore (ArcSwap, hot-swapped) → enriches LiveTrip
 LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + REST snapshots
                                                                        ↘ data/*.snap
@@ -118,8 +116,8 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
 
 | Crate | Role |
 |---|---|
-| `core` | Domain only, zero I/O: `LiveTrip`, trip lifecycle, `Filters`, R-tree `VehicleIndex`, RD→WGS84, `BlockStore`. Where the unit tests live. |
-| `realtime` | ZMQ SUB loops + feed decoders (`kv6.rs` XML, `kv78.rs` pipe-delimited, `ns.rs` NS InfoPlus XML). Emits normalized events over mpsc. |
+| `core` | Domain only, zero I/O: `LiveTrip`, trip lifecycle, `Filters`, R-tree `VehicleIndex`, RD→WGS84. Where the unit tests live. |
+| `realtime` | ZMQ SUB loops + feed decoders (`kv6.rs` XML, `ns.rs` NS InfoPlus XML). Emits normalized events over mpsc. |
 | `gtfs` | Conditional download, streaming zip/CSV parse, `GtfsService` (hot-swappable feed) implementing `core::Enricher`, plus the day-scoped `StopIndexes` behind the deprecated stops endpoints. |
 | `persist` | Postgres accounts/keys (Argon2 passwords, SHA-256 key hashes) + generic gzip-bincode snapshots. |
 | `api` | axum router: REST JSON, protobuf WS, auth extractors, rate limiting, embedded OpenAPI. |
@@ -156,7 +154,7 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
 - **Enrichment is idempotent and lazy** — re-run only while `line_public_number` is still `None`,
   so a mid-run GTFS swap costs nothing.
 - **State survives restarts via snapshots**, not the database: `gtfs.snap`, `realtime.snap`,
-  `blocks.snap`, `train_delays.snap`, `gtfs_meta.bin` under `DATA_DIR` (gzip bincode, atomic temp+rename). Restored
+  `train_delays.snap`, `gtfs_meta.bin` under `DATA_DIR` (gzip bincode, atomic temp+rename). Restored
   state is immediately pruned against `now`. Bincode has no schema evolution, so **adding a
   field to `GtfsStore`/`LiveTrip` invalidates the corresponding snapshot** — that is safe and
   self-healing (GTFS falls back to re-parsing the cached zip, live trips refill from the feed
@@ -229,36 +227,28 @@ envelopes we take two — over **one** SUB connection, because fair use counts d
     **6× the message rate** for the same bytes. RitInfo was chosen because it carries the whole
     journey in one message; add DVS alongside it if cold-start coverage matters more than CPU.
   - `crates/realtime/examples/nsdelay.rs` is this measurement — re-run it before changing source.
-- **No next-line prediction for trains**: it comes from KV78Turbo, which carries no rail.
 - Only **NS** trains report positions. Arriva, Blauwnet, Eurobahn etc. are in the schedule (and in
   `train_trips`) but never appear live.
 - Not implemented, though RitInfo carries it: per-stop expected times and platform
   (`TreinVertrekSpoor`). Trains are the one mode where per-stop realtime *is* joinable — see the
   `UserStopCode` measurement below for why buses can't have it.
 
-### Next-line prediction (the non-obvious subsystem)
+### Next-line prediction was removed — don't rebuild it casually
 
-"This vehicle continues as line X" comes from KV78Turbo block chaining, because the obvious
-sources are empty in the NL feeds: **GTFS `block_id` is blank/placeholder and KV6 `blockcode` is
-~0–2% filled**. The GTFS-derived `block_code` enrichment is effectively dead code.
+A "this vehicle continues as line X" feature (KV78Turbo block/omloop chaining, `BlockStore`,
+the `next_trip` REST field and `next_*` proto fields — now `reserved 18–20` in
+`ovlive.proto`) shipped and was then removed because it couldn't be made to work reliably.
+What was measured before removal, so it isn't rediscovered the hard way:
 
-`BlockStore` (`core/src/blocks.rs`) indexes KV78 journeys by `(dataowner, line_planning_number,
-journey_number)` plus `(dataowner, block_code) → members`, and `predict_next` returns the soonest
-block member starting after the current journey.
-
-- **Resolve the block from the KV78 index, not the live KV6 `block_code`** — the live value is
-  cleared shortly after journey start for RET. KV6 block is only a fallback for journeys absent
-  from the index. (GVB predicts ~100% with zero KV6 block codes; keying off the live value was a
-  measured regression.)
-- **Low prediction rates for RET/HTM/QBUZZ are a feed limitation, not a bug**: NDOV publishes their
-  next journey only ~1–7 min ahead, so successors are rarely co-resident. ARR/CXX/EBS/GVB/KEOLIS
-  publish far ahead and hit 40–100%.
-- KV78 is a firehose (~940 records/s nationally), hence `ZMQ_KV78_TOPICS` defaults to
-  `/GOVI/KV8passtimes/`, per-message collapse to one update per journey, and a 60 s prune against
-  `BLOCK_PRUNE_SECS`. `ZMQ_KV78_ENABLED=false` skips the whole subsystem.
-- Investigated and rejected: NeTEx blocks (authoritative for 5 operators but **zero** for RET and
-  QBUZZ), the `Vejo*` field cluster (mirrors the same journey), SIRI-VM (not in production in NL),
-  KV1/KV4/KV15/KV17/KV19/KV20. A learned/inferred model was explicitly declined as too error-prone.
+- The obvious sources are empty in the NL feeds: **GTFS `block_id` is blank/placeholder and
+  KV6 `blockcode` is ~0–2% filled**; only KV78Turbo (`KV8passtimes`, `:7817`, a ~940 record/s
+  firehose) carries usable block codes, and for RET/HTM/QBUZZ NDOV publishes the next journey
+  only ~1–7 min ahead, so successors were rarely co-resident and prediction rates stayed low.
+- Also investigated and rejected: NeTEx blocks (authoritative for 5 operators but **zero** for
+  RET and QBUZZ), the `Vejo*` field cluster (mirrors the same journey), SIRI-VM (not in
+  production in NL), KV1/KV4/KV15/KV17/KV19/KV20, and a learned/inferred model (too error-prone).
+- `LiveTrip::block_code` (the raw KV6 omloop value) **stays**: it feeds the legacy
+  `omloopNumber`, the free-text filter, and proto field 12 — it was never the prediction.
 
 ### Deprecated compatibility API (`crates/api/src/legacy.rs`) — temporary, delete when unused
 
@@ -315,7 +305,8 @@ dates are the only way to know which of the 1.04M trips run today (~111k, 10.7%)
 
 ### BISON `UserStopCode` does not join to gtfs-nl stops (measured)
 
-KV6/KV78 identify stops by `UserStopCode` (also `QuayCode` = `NL:Q:<code>`). Measured live over
+KV6 (and the other BISON feeds, e.g. KV78Turbo) identify stops by `UserStopCode` (also
+`QuayCode` = `NL:Q:<code>`). Measured live over
 3,000 vehicles (817 reporting a stop), it matches a GTFS **`stop_id` for 0%** and a
 **`stop_code` for 30%** — and that 30% is essentially Connexxion alone:
 
@@ -325,7 +316,8 @@ KV6/KV78 identify stops by `UserStopCode` (also `QuayCode` = `NL:Q:<code>`). Mea
 
 Consequences, so this isn't rediscovered the hard way:
 
-- **There is no per-stop realtime data**, even though KV78Turbo publishes per-stop
+- **There is no per-stop realtime data**, even though KV78Turbo (no longer consumed — see the
+  removed next-line prediction above) publishes per-stop
   `ExpectedArrivalTime`/`ExpectedDepartureTime`/`TripStopStatus`. Retaining them was
   implemented and then **reverted**: it costs per-row work on a ~940 record/s firehose to
   enrich a minority of stops and none of the big city operators. Don't retry without first
@@ -350,11 +342,11 @@ Consequences, so this isn't rediscovered the hard way:
   editing that file too — nothing validates it against the router.
 - **A backend contract change is not "done" until the frontend uses it.** `apps/web` is a working
   React Router 7 SPA (SSR off) with MapLibre: `MapView`, `VehiclePanel` (tabs, follow, isolate,
-  upcoming stops, "continues as" card), `FiltersPanel`, NL/EN i18n in `app/lib/i18n.tsx`. It talks
+  upcoming stops), `FiltersPanel`, NL/EN i18n in `app/lib/i18n.tsx`. It talks
   to the backend only through `@ovlive/api-types` (`LiveClient` WS + `RestClient`), aliased to
   source by `apps/web/vite.config.ts`. Check `apps/web` before claiming a feature is user-visible.
 - **The vehicle detail is split into a polled half and a static half**, because only one of them
-  changes. `GET /v1/vehicles/{id}` (polled every 8 s) carries the vehicle, `next_trip`, and the
+  changes. `GET /v1/vehicles/{id}` (polled every 8 s) carries the vehicle and the
   matched `trip_id`; `GET /v1/vehicles/{id}/trip` carries the route shape and **every** scheduled
   call, and is fetched once — again only when `trip_id` changes. Measured on a live NS trip: 28.3
   KB of shape+stops against a 0.5 KB poll, so the shape was ~98% of a payload that could not have

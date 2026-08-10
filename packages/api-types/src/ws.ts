@@ -31,9 +31,6 @@ function toVehicle(s: any): Vehicle {
     currentStopId: s.current_stop_id || "",
     lineColor: s.line_color || "",
     lineTextColor: s.line_text_color || "",
-    nextLine: s.next_line_public_number || "",
-    nextDestination: s.next_destination || "",
-    nextStart: Number(s.next_start_unix) || 0,
   };
 }
 

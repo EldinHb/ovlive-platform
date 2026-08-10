@@ -10,7 +10,6 @@
 //! (port 7664) carries trains, which are absent from KV6 altogether.
 
 mod kv6;
-mod kv78;
 mod ns;
 mod ns_rit;
 
@@ -18,13 +17,12 @@ use std::io::Read;
 use std::time::Duration;
 
 use flate2::read::GzDecoder;
-use ovlive_core::{JourneyUpdate, PosEvent, TrainUpdate};
+use ovlive_core::{PosEvent, TrainUpdate};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, info, warn};
 use zeromq::{Socket, SocketRecv, SubSocket};
 
 pub use kv6::parse_kv6;
-pub use kv78::parse_kv78;
 pub use ns::{parse_ns_treinposities, TRAIN_DATAOWNER};
 pub use ns_rit::parse_ns_rit;
 
@@ -32,7 +30,6 @@ pub use ns_rit::parse_ns_rit;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamKind {
     Kv6,
-    Kv78Turbo,
     /// NS InfoPlus `NStreinpositiesInterface5` — train GPS.
     NsTreinposities,
 }
@@ -74,8 +71,6 @@ fn gunzip(payload: &[u8]) -> Option<String> {
 fn decode(cfg: &StreamConfig, payload: &[u8]) -> Vec<PosEvent> {
     match cfg.kind {
         StreamKind::Kv6 => gunzip(payload).map(|xml| parse_kv6(&xml)).unwrap_or_default(),
-        // KV78Turbo (KV8 journey updates) is not decoded in v1 — positions come from KV6.
-        StreamKind::Kv78Turbo => Vec::new(),
         // NS InfoPlus can't be decoded from `kind` alone: one connection carries both the
         // positions and the RitInfo envelope, so `run_infoplus_stream` dispatches on the topic
         // frame. Deliberately not a second parse path for the same feed.
@@ -214,57 +209,6 @@ async fn pump_infoplus(
                 if tx.send(u).await.is_err() {
                     return Ok(());
                 }
-            }
-        }
-    }
-}
-
-/// Run the KV78Turbo stream forever, decoding `KV8passtimes` into per-journey
-/// [`JourneyUpdate`]s for block/next-line chaining. Same reconnect/watchdog policy as
-/// [`run_stream`]. Returns only when `tx` closes.
-pub async fn run_journey_stream(cfg: StreamConfig, tx: Sender<JourneyUpdate>) {
-    let mut backoff = Duration::from_secs(1);
-    loop {
-        match connect_and_pump_journeys(&cfg, &tx).await {
-            Ok(()) => {
-                info!(target: "ovlive::rt", stream = %cfg.name, "journey consumer closed; stopping");
-                return;
-            }
-            Err(e) => {
-                warn!(target: "ovlive::rt", stream = %cfg.name, "stream error: {e}; reconnecting in {:?}", backoff);
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(30));
-            }
-        }
-    }
-}
-
-async fn connect_and_pump_journeys(cfg: &StreamConfig, tx: &Sender<JourneyUpdate>) -> anyhow::Result<()> {
-    let mut socket = SubSocket::new();
-    socket.connect(&cfg.endpoint).await?;
-    if cfg.topics.is_empty() {
-        socket.subscribe("").await?;
-    } else {
-        for t in &cfg.topics {
-            socket.subscribe(t).await?;
-        }
-    }
-    info!(target: "ovlive::rt", stream = %cfg.name, endpoint = %cfg.endpoint, "subscribed");
-
-    loop {
-        let msg = match tokio::time::timeout(cfg.idle_timeout, socket.recv()).await {
-            Ok(res) => res?,
-            Err(_) => anyhow::bail!("no data for {:?}; assuming dead socket", cfg.idle_timeout),
-        };
-        let frames = msg.into_vec();
-        if frames.len() < 2 {
-            continue; // topic-only / heartbeat
-        }
-        let payload: Vec<u8> = frames[1..].iter().flat_map(|b| b.iter().copied()).collect();
-        let Some(text) = gunzip(&payload) else { continue };
-        for u in parse_kv78(&text) {
-            if tx.send(u).await.is_err() {
-                return Ok(()); // consumer gone
             }
         }
     }

@@ -8,7 +8,7 @@
 //! Run: `cargo run --example nslisten -p ovlive-realtime`
 //! Env: SAMPLE_SECS (default 30), OUT (default data/ns-treinposities.md).
 //!
-//! NB fair-use: only ONE connection per datastream. Port 7664 is separate from KV6/KV78,
+//! NB fair-use: only ONE connection per datastream. Port 7664 is separate from KV6,
 //! so this is safe to run alongside the server *unless* the server's NS stream is enabled.
 
 use std::collections::BTreeMap;
