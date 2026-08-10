@@ -20,6 +20,15 @@ const TRAIN_DATAOWNER: &str = "IFF";
 /// operator, matched GTFS trip id) onto a live trip. Implemented by `ovlive-gtfs`.
 pub trait Enricher: Send + Sync {
     fn enrich(&self, trip: &mut LiveTrip);
+
+    /// The station a fix-less trip is at, per its matched GTFS trip's schedule and its
+    /// reported punctuality — `(lat, lon)`, or `None` when no scheduled call sits close
+    /// enough to claim. Consulted per message (unlike [`Enricher::enrich`], which is lazy),
+    /// because the answer changes with every station call. Exists for vehicles that report
+    /// no coordinates at all — RET metros foremost; see `LiveTrip::schedule_positioned`.
+    fn scheduled_position(&self, _trip: &LiveTrip) -> Option<(f64, f64)> {
+        None
+    }
 }
 
 /// A no-op enricher for tests / running without GTFS loaded yet.
@@ -124,6 +133,7 @@ impl LiveState {
                 apply_fields(&mut trip, &ev);
                 self.apply_train_delay(&mut trip);
                 enricher.enrich(&mut trip);
+                anchor_to_schedule(&mut trip, &ev, enricher);
                 self.trips.insert(id.clone(), trip);
                 (id, false)
             }
@@ -165,6 +175,7 @@ impl LiveState {
                 if needs_enrich {
                     enricher.enrich(&mut entry);
                 }
+                anchor_to_schedule(&mut entry, &ev, enricher);
                 (id, false)
             }
         }
@@ -221,28 +232,66 @@ impl LiveState {
     }
 }
 
-fn apply_fields(trip: &mut LiveTrip, ev: &PosEvent) {
-    // WGS84 straight from the feed (NS InfoPlus) wins over Rijksdriehoek (KV6); converting
-    // RD is only worth doing when that's all we were given.
-    let fix = match (ev.lat, ev.lon) {
+/// The position an event carries, if any: WGS84 straight from the feed (NS InfoPlus) wins
+/// over Rijksdriehoek (KV6); converting RD is only worth doing when that's all we were given.
+fn fix_from(ev: &PosEvent) -> Option<(f64, f64)> {
+    match (ev.lat, ev.lon) {
         (Some(lat), Some(lon)) => Some((lat, lon)),
         _ => match (ev.rd_x, ev.rd_y) {
             (Some(x), Some(y)) => Some(rd::rd_to_wgs84(x, y)),
             _ => None,
         },
-    };
-    if let Some((lat, lon)) = fix {
-        if trip.has_position() {
-            let b = rd::bearing(trip.lat, trip.lon, lat, lon);
-            // Keep old bearing if the vehicle barely moved (avoids jitter when stopped).
-            if (lat - trip.lat).abs() > 1e-6 || (lon - trip.lon).abs() > 1e-6 {
-                trip.bearing = b;
-            }
-            trip.prev_lat = trip.lat;
-            trip.prev_lon = trip.lon;
+    }
+}
+
+/// Move a trip to a new position, deriving bearing from the previous one. Shared by real
+/// fixes and schedule-anchored placements, so a metro hopping station-to-station points
+/// along its direction of travel exactly like a GPS vehicle does.
+fn set_position(trip: &mut LiveTrip, lat: f64, lon: f64) {
+    if trip.has_position() {
+        let b = rd::bearing(trip.lat, trip.lon, lat, lon);
+        // Keep old bearing if the vehicle barely moved (avoids jitter when stopped).
+        if (lat - trip.lat).abs() > 1e-6 || (lon - trip.lon).abs() > 1e-6 {
+            trip.bearing = b;
         }
-        trip.lat = lat;
-        trip.lon = lon;
+        trip.prev_lat = trip.lat;
+        trip.prev_lon = trip.lon;
+    }
+    trip.lat = lat;
+    trip.lon = lon;
+}
+
+/// Anchor a fix-less trip to its scheduled station, when the enricher can name one.
+///
+/// Runs after `apply_fields` and enrichment, so the trip already carries the event's
+/// punctuality and (once matched) its GTFS trip. Two deliberate gates:
+///
+/// - Only station-lifecycle messages move the anchor (INIT/ARRIVAL/ONSTOP/DEPARTURE): they
+///   assert "at stop X now". ONROUTE asserts only "between stops" — anchoring on it would
+///   hop the dot to whichever station is temporally nearer, i.e. ahead of the truth.
+/// - Never touches a vehicle that has ever produced a real fix: `apply_fields` clears
+///   `schedule_positioned` on every real fix, so a positioned-but-not-flagged trip is a GPS
+///   vehicle in a dropout, which keeps its last true position instead of snapping to a stop.
+fn anchor_to_schedule(trip: &mut LiveTrip, ev: &PosEvent, enricher: &dyn Enricher) {
+    let station_event = matches!(
+        ev.kind,
+        MessageKind::Init | MessageKind::Arrival | MessageKind::OnStop | MessageKind::Departure
+    );
+    if !station_event || (trip.has_position() && !trip.schedule_positioned) {
+        return;
+    }
+    if let Some((lat, lon)) = enricher.scheduled_position(trip) {
+        set_position(trip, lat, lon);
+        trip.schedule_positioned = true;
+    }
+}
+
+fn apply_fields(trip: &mut LiveTrip, ev: &PosEvent) {
+    if let Some((lat, lon)) = fix_from(ev) {
+        set_position(trip, lat, lon);
+        // A real fix outranks any schedule-derived stand-in, permanently: a vehicle that has
+        // GPS must never be snapped back to a station by a later fix-less message.
+        trip.schedule_positioned = false;
     }
     // A feed-supplied course beats anything derived from two fixes, and unlike the derived
     // value it's still right when the vehicle has only ever reported one position. The NS
@@ -524,6 +573,94 @@ mod tests {
             &Filters::default(),
         );
         assert_eq!(none.len(), 0);
+    }
+
+    /// Enricher stand-in for a schedule that says "this vehicle is at station (lat, lon)".
+    /// A different instance per apply models the vehicle reaching the next station.
+    struct StationAt(f64, f64);
+    impl Enricher for StationAt {
+        fn enrich(&self, _trip: &mut LiveTrip) {}
+        fn scheduled_position(&self, _trip: &LiveTrip) -> Option<(f64, f64)> {
+            Some((self.0, self.1))
+        }
+    }
+
+    /// A RET-metro-shaped event: station lifecycle, punctuality, but never a coordinate
+    /// (measured live: 0 of 155 RET metro records carried a usable rd-x).
+    fn metro_ev(kind: MessageKind) -> PosEvent {
+        let mut e = ev(kind, "457295", 0.0, 0.0);
+        e.rd_x = None;
+        e.rd_y = None;
+        e
+    }
+
+    #[test]
+    fn fixless_station_event_anchors_to_schedule() {
+        let s = LiveState::new(240);
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.93, 4.59));
+        let t = s.get("RET:1001").unwrap();
+        assert!(t.has_position());
+        assert!(t.schedule_positioned);
+        assert_eq!((t.lat, t.lon), (51.93, 4.59));
+        // And therefore it is actually on the map: the index only holds positioned trips.
+        assert_eq!(s.build_index().len(), 1);
+    }
+
+    #[test]
+    fn anchor_hops_stations_and_derives_bearing() {
+        let s = LiveState::new(240);
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.93, 4.59));
+        assert!(s.get("RET:1001").unwrap().bearing.is_nan(), "one station, no direction yet");
+        // Next station is due east; the second anchor must point the marker that way.
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.93, 4.61));
+        let t = s.get("RET:1001").unwrap();
+        assert_eq!((t.lat, t.lon), (51.93, 4.61));
+        assert!((t.bearing - 90.0).abs() < 5.0, "expected ~east, got {}", t.bearing);
+    }
+
+    #[test]
+    fn onroute_without_fix_does_not_anchor() {
+        let s = LiveState::new(240);
+        // ONROUTE only says "between stops": it must neither create a position...
+        s.apply(metro_ev(MessageKind::OnRoute), &StationAt(51.93, 4.59));
+        assert!(!s.get("RET:1001").unwrap().has_position());
+        // ...nor move an existing anchor off its last confirmed station.
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.93, 4.59));
+        s.apply(metro_ev(MessageKind::OnRoute), &StationAt(51.94, 4.61));
+        assert_eq!(s.get("RET:1001").unwrap().lat, 51.93);
+    }
+
+    /// A vehicle with GPS must never be snapped to a station: a real fix clears the flag
+    /// permanently, so later fix-less station messages (GPS dropout) keep the last true
+    /// position rather than teleporting the dot to a scheduled stop.
+    #[test]
+    fn real_fix_wins_over_schedule_anchor_for_good() {
+        let s = LiveState::new(240);
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.93, 4.59));
+        assert!(s.get("RET:1001").unwrap().schedule_positioned);
+
+        // A real fix arrives (vehicle surfaced / GPS recovered).
+        s.apply(ev(MessageKind::OnRoute, "457295", 120_700.0, 487_200.0), &StationAt(51.93, 4.59));
+        let t = s.get("RET:1001").unwrap();
+        assert!(!t.schedule_positioned);
+        let gps = (t.lat, t.lon);
+        assert_ne!(gps, (51.93, 4.59));
+
+        // Fix-less station message afterwards: position holds, no snap back to a station.
+        s.apply(metro_ev(MessageKind::Arrival), &StationAt(51.95, 4.70));
+        let t = s.get("RET:1001").unwrap();
+        assert!(!t.schedule_positioned);
+        assert_eq!((t.lat, t.lon), gps);
+    }
+
+    #[test]
+    fn no_scheduled_match_stays_unpositioned_rather_than_guessing() {
+        let s = LiveState::new(240);
+        s.apply(metro_ev(MessageKind::Arrival), &NoEnricher);
+        let t = s.get("RET:1001").unwrap();
+        assert!(!t.has_position());
+        assert!(!t.schedule_positioned);
+        assert_eq!(s.build_index().len(), 0);
     }
 
     #[test]

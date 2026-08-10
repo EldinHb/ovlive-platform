@@ -128,6 +128,10 @@ impl Enricher for GtfsService {
             store.enrich(trip);
         }
     }
+
+    fn scheduled_position(&self, trip: &LiveTrip) -> Option<(f64, f64)> {
+        self.store.load_full()?.scheduled_position(trip)
+    }
 }
 
 /// Conditionally download to the cached `zip_path`, parse, and swap in the new feed.

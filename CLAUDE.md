@@ -233,6 +233,34 @@ envelopes we take two — over **one** SUB connection, because fair use counts d
   (`TreinVertrekSpoor`). Trains are the one mode where per-stop realtime *is* joinable — see the
   `UserStopCode` measurement below for why buses can't have it.
 
+### RET metros: schedule-anchored positions (no GPS in the feed)
+
+RET metros are in KV6 with a full lifecycle (INIT/ARRIVAL/ONSTOP/DEPARTURE/ONROUTE/END, lines
+`M006`–`M010`) but **publish no coordinates at all** — measured live (2026-08-10, 155 records
+in 3 min): 128 omitted `rd-x` entirely, 27 sent the literal `-1` "unknown"; zero were usable.
+`crates/realtime/examples/kv6metro.rs` is this measurement (KV6 = one SUB — stop the server
+first). Their position is therefore **derived, not received**:
+
+- `Enricher::scheduled_position` (implemented by `GtfsStore::scheduled_position_of`) matches
+  `last_update − delay` against the matched trip's `stop_times` on the operating day's
+  seconds-since-local-midnight axis, within a 90 s tolerance — beyond it, no position rather
+  than a neighbouring station. KV6 punctuality *is* the offset from this schedule: the live
+  residual measured was <1 s. `operatingday` is on every KV6 record, so after-midnight runs
+  measure against yesterday's midnight and land on the >86400 schedule values.
+- `core::anchor_to_schedule` applies it only on station messages (INIT/ARRIVAL/ONSTOP/
+  DEPARTURE) — ONROUTE says "between stops", and anchoring on it would hop the dot ahead of
+  the truth — and only to trips that have never produced a real fix (`apply_fields` clears
+  `LiveTrip::schedule_positioned` on every real fix, so a GPS vehicle in a dropout keeps its
+  last true position instead of snapping to a stop). The dot marks the **last confirmed
+  station**, hops station-to-station, and is deliberately never interpolated between them.
+- The join is exact for metro: 23,923 RET metro trips, each with a **unique**
+  `realtime_trip_id` — none of the ~2.1× pattern collapse `trip_by_key` has elsewhere.
+  `UserStopCode` (`HA8xxx`) cannot name the station: those codes appear **nowhere** in
+  gtfs-nl's `stops.txt` (RET rows ship an empty `stop_code` — the 0% in the table below).
+- `schedule_positioned` is exposed on REST, WS (proto fields 22/9) and the TS types.
+- KV6 `vehiclenumber` `0` is BISON's "vehicle unknown" (seen live on a metro): every such
+  record would share one key and thrash the journey-change rule, so the parser drops them.
+
 ### Next-line prediction was removed — don't rebuild it casually
 
 A "this vehicle continues as line X" feature (KV78Turbo block/omloop chaining, `BlockStore`,

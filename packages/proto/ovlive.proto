@@ -94,6 +94,10 @@ message VehicleState {
   // 18–20 were the removed next-trip prediction fields; never reuse the numbers.
   reserved 18, 19, 20;
   reserved "next_line_public_number", "next_destination", "next_start_unix";
+  // lat/lon is the vehicle's scheduled station rather than a GPS fix. RET metros publish no
+  // coordinates at all, so their dot marks the last confirmed station call and hops
+  // station-to-station; it is never interpolated between them.
+  bool schedule_positioned = 22;
 }
 
 // Lightweight position delta for a vehicle already in view.
@@ -106,6 +110,7 @@ message VehicleMove {
   bool delay_known = 8;
   bool at_stop = 6;
   string current_stop_id = 7;
+  bool schedule_positioned = 9;  // see VehicleState; can flip mid-trip if GPS (re)appears
 }
 
 // One batched tick of changes for a subscription. Any repeated field may be empty.

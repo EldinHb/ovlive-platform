@@ -112,6 +112,14 @@ pub struct LiveTrip {
     pub lat: f64,
     pub lon: f64,
     pub bearing: f32,
+    /// Whether `lat`/`lon` is a schedule-anchored station position rather than a GPS fix.
+    ///
+    /// RET metros publish no usable coordinates at all (measured live: 0 of 155 records had
+    /// a positive rd-x — 128 omitted it, 27 sent KV6's `-1` "unknown"), so their position is
+    /// derived by matching `timestamp − punctuality` against the matched GTFS trip's
+    /// scheduled calls. The dot marks the last confirmed station, not an interpolated point.
+    /// A real fix always wins and clears this.
+    pub schedule_positioned: bool,
     pub delay_seconds: i32,
     /// Whether `delay_seconds` is a measurement or just its zero default.
     ///
@@ -158,6 +166,7 @@ impl LiveTrip {
             lat: f64::NAN,
             lon: f64::NAN,
             bearing: f32::NAN,
+            schedule_positioned: false,
             delay_seconds: 0,
             delay_known: false,
             at_stop: false,

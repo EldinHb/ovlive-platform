@@ -281,6 +281,53 @@ impl GtfsStore {
 /// this is really a property of gtfs-nl — the prefix it gives every rail `realtime_trip_id`.
 const TRAIN_DATAOWNER: &str = "IFF";
 
+/// Widest residual a schedule anchor may have, in seconds, after correcting for the
+/// vehicle's reported punctuality.
+///
+/// Metro station calls are scheduled 90–180 s apart, and the residual measured live was
+/// under a second (a RET ARRIVAL at 10:21:26.6 with punctuality +11 against a 10:21:15
+/// scheduled call — KV6 punctuality *is* the offset from this schedule). 90 s accepts real
+/// matches with room for clock skew while rejecting a wrong-day or wrong-trip match, which
+/// must yield no position rather than a neighbouring station.
+const SCHEDULE_ANCHOR_TOLERANCE_SECS: i64 = 90;
+
+impl GtfsStore {
+    /// The station a fix-less vehicle is at, from its matched trip's schedule: the call
+    /// nearest to `last_update − delay` on the operating day's seconds-since-local-midnight
+    /// axis, within [`SCHEDULE_ANCHOR_TOLERANCE_SECS`].
+    ///
+    /// This exists because KV6's `UserStopCode` cannot name the station: RET metro stops
+    /// ship an **empty** `stop_code` in gtfs-nl (measured — the live `HA8xxx` codes appear
+    /// nowhere in `stops.txt`), so the stop has to be recovered from the trip + the clock
+    /// instead. The RET metro join itself is exact: 23,923 metro trips, each with a unique
+    /// `realtime_trip_id`, none of the pattern-collapse `trip_by_key` has for buses.
+    fn scheduled_position_of(&self, trip: &LiveTrip) -> Option<(f64, f64)> {
+        let times = self.stop_times.get(trip.matched_trip_id.as_deref()?)?;
+        let day = NaiveDate::parse_from_str(trip.operating_day.as_deref()?, "%Y-%m-%d").ok()?;
+        let midnight = crate::local_midnight_utc(day, chrono_tz::Europe::Amsterdam)?;
+        // KV6 supplies `operatingday` on every record, so an after-midnight metro measures
+        // against yesterday's midnight and lands on the schedule's >86400 second values.
+        let now = (trip.last_update - midnight).num_seconds();
+        let target = if trip.delay_known { now - i64::from(trip.delay_seconds) } else { now };
+
+        let mut best: Option<(i64, &StopTime)> = None;
+        for st in times.iter() {
+            let d = (i64::from(st.arrival) - target)
+                .abs()
+                .min((i64::from(st.departure) - target).abs());
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, st));
+            }
+        }
+        let (residual, st) = best?;
+        if residual > SCHEDULE_ANCHOR_TOLERANCE_SECS {
+            return None;
+        }
+        let s = self.stops.get(&st.stop_id)?;
+        Some((s.lat, s.lon))
+    }
+}
+
 impl GtfsStore {
     /// Resolve a train's GTFS trip from its number, and backfill the parts of the vehicle
     /// identity that the NS position feed doesn't publish.
@@ -329,6 +376,10 @@ fn service_date_local(at: DateTime<Utc>) -> NaiveDate {
 impl Enricher for GtfsStore {
     fn enrich(&self, trip: &mut LiveTrip) {
         self.enrich_trip(trip);
+    }
+
+    fn scheduled_position(&self, trip: &LiveTrip) -> Option<(f64, f64)> {
+        self.scheduled_position_of(trip)
     }
 }
 
@@ -429,6 +480,134 @@ mod tests {
         s.enrich(&mut t);
         assert_eq!(t.matched_trip_id.as_deref(), Some("T-TUE"));
         assert_eq!(t.operating_day.as_deref(), Some("2026-07-28"), "yesterday's service date");
+    }
+
+    /// The measured RET metro shape: trip `RET:M008:457295` on 2026-08-10, whose live
+    /// ARRIVAL came at 10:21:26.6 with punctuality +11 against a 10:21:15 scheduled call.
+    /// Times are seconds since local midnight: 10:12:30, 10:14:45, 10:21:15.
+    fn store_with_metro() -> GtfsStore {
+        let mut s = GtfsStore::default();
+        s.routes.insert(
+            "RM".into(),
+            RouteInfo {
+                route_id: "RM".into(),
+                agency_id: Some("RET".into()),
+                short_name: "B".into(),
+                long_name: "lijn".into(),
+                vehicle_type: VehicleType::Metro,
+                color: Some("ffdc00".into()),
+                text_color: Some("000000".into()),
+            },
+        );
+        s.trips.insert(
+            "TM".into(),
+            TripInfo {
+                trip_id: "TM".into(),
+                route_id: "RM".into(),
+                headsign: "De Terp".into(),
+                block_id: None,
+                shape_id: None,
+                service_id: "S-SUN".into(),
+                long_name: String::new(),
+                realtime_trip_id: Some("RET:M008:457295".into()),
+            },
+        );
+        s.trip_by_key.insert("RET:M008:457295".into(), "TM".into());
+        s.service_dates.insert("S-SUN".into(), vec![20_260_810]);
+        for (id, name, lat, lon) in [
+            ("ST1", "Kralingse Zoom", 51.921644, 4.533398),
+            ("ST2", "Voorschoterlaan", 51.925141, 4.512614),
+            ("ST3", "Capelle Centrum", 51.931562, 4.590164),
+        ] {
+            s.stops.insert(
+                id.into(),
+                StopInfo {
+                    stop_id: id.into(),
+                    name: name.into(),
+                    lat,
+                    lon,
+                    code: None, // gtfs-nl leaves stop_code empty for RET — the whole point
+                    platform_code: None,
+                    parent_station: None,
+                    location_type: 0,
+                },
+            );
+        }
+        s.stop_times.insert(
+            "TM".into(),
+            vec![
+                StopTime { stop_id: "ST1".into(), stop_sequence: 1, arrival: 36_750, departure: 36_750 },
+                StopTime { stop_id: "ST2".into(), stop_sequence: 2, arrival: 36_885, departure: 36_885 },
+                StopTime { stop_id: "ST3".into(), stop_sequence: 3, arrival: 37_275, departure: 37_275 },
+            ],
+        );
+        s
+    }
+
+    fn metro_at(ts: &str) -> LiveTrip {
+        let key = VehicleKey { dataowner: "RET".into(), vehicle_number: "5342".into() };
+        let at = DateTime::parse_from_rfc3339(ts).unwrap().with_timezone(&Utc);
+        let mut t = LiveTrip::new(key, at);
+        t.matched_trip_id = Some("TM".into());
+        t.operating_day = Some("2026-08-10".into());
+        t.delay_seconds = 11;
+        t.delay_known = true;
+        t
+    }
+
+    /// The exact live-measured case: 10:21:26.6 CEST, +11 s late, resolves to the
+    /// 10:21:15 call — the third station, not either neighbour.
+    #[test]
+    fn anchors_the_measured_arrival_to_its_station() {
+        let s = store_with_metro();
+        let t = metro_at("2026-08-10T10:21:26.588+02:00");
+        assert_eq!(s.scheduled_position(&t), Some((51.931562, 4.590164)));
+    }
+
+    #[test]
+    fn unknown_delay_falls_back_to_the_raw_clock() {
+        let s = store_with_metro();
+        // Dead on the second call's scheduled time; without punctuality the raw
+        // timestamp is the best claim available.
+        let mut t = metro_at("2026-08-10T10:14:45+02:00");
+        t.delay_known = false;
+        assert_eq!(s.scheduled_position(&t), Some((51.925141, 4.512614)));
+    }
+
+    /// Mid-gap between calls, beyond tolerance on both sides: no position, never a guess.
+    #[test]
+    fn rejects_a_match_outside_tolerance() {
+        let s = store_with_metro();
+        // 10:19:00 → 255 s past ST2, 135 s before ST3 (after the -11 s delay correction).
+        let t = metro_at("2026-08-10T10:19:00+02:00");
+        assert_eq!(s.scheduled_position(&t), None);
+    }
+
+    /// After-midnight service: the schedule runs past 86400 on *yesterday's* axis, and the
+    /// KV6 `operatingday` is what says which midnight to measure from.
+    #[test]
+    fn after_midnight_call_resolves_on_yesterdays_axis() {
+        let mut s = store_with_metro();
+        s.stop_times.get_mut("TM").unwrap().push(StopTime {
+            stop_id: "ST1".into(),
+            stop_sequence: 4,
+            arrival: 87_000, // 24:10:00
+            departure: 87_000,
+        });
+        // 00:10:11 CEST on the 11th, +11 s late, operating day still 2026-08-10.
+        let t = metro_at("2026-08-11T00:10:11+02:00");
+        assert_eq!(s.scheduled_position(&t), Some((51.921644, 4.533398)));
+    }
+
+    #[test]
+    fn no_match_without_trip_or_operating_day() {
+        let s = store_with_metro();
+        let mut t = metro_at("2026-08-10T10:21:26+02:00");
+        t.matched_trip_id = None;
+        assert_eq!(s.scheduled_position(&t), None);
+        let mut t = metro_at("2026-08-10T10:21:26+02:00");
+        t.operating_day = None;
+        assert_eq!(s.scheduled_position(&t), None);
     }
 
     /// Non-rail vehicles must keep using the KV6 `realtime_trip_id` join untouched.

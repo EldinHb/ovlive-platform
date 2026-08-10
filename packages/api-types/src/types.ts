@@ -50,6 +50,11 @@ export interface Vehicle {
   journey: string;
   atStop: boolean;
   currentStopId: string;
+  /**
+   * `lat`/`lon` is the scheduled station, not a GPS fix. RET metros publish no coordinates,
+   * so their dot marks the last confirmed station call and hops station-to-station.
+   */
+  schedulePositioned: boolean;
   /** GTFS line colours (6-hex, no '#'); "" when the line has none. */
   lineColor: string;
   lineTextColor: string;
@@ -66,6 +71,8 @@ export interface MoveDelta {
   delayKnown: boolean;
   atStop: boolean;
   currentStopId: string;
+  /** See `Vehicle.schedulePositioned`; can flip mid-trip if GPS (re)appears. */
+  schedulePositioned: boolean;
 }
 
 export interface NormalizedUpdate {
@@ -151,6 +158,8 @@ export interface VehicleSummary {
   journey_number: string | null;
   at_stop: boolean;
   current_stop_id: string | null;
+  /** `lat`/`lon` is the scheduled station, not a GPS fix (RET metros publish none). */
+  schedule_positioned: boolean;
   line_color: string | null;
   line_text_color: string | null;
   last_update: string;
