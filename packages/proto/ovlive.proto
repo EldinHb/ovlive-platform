@@ -91,12 +91,9 @@ message VehicleState {
   string current_stop_id = 15;   // set while at_stop
   string line_color = 16;        // GTFS route_color (6-hex, no '#'); "" if the line has none
   string line_text_color = 17;   // GTFS route_text_color (6-hex, no '#'); "" if none
-  // Predicted NEXT trip for this vehicle: after the current journey ends, the same
-  // vehicle (block/omloop) typically continues as another line. Derived from KV78Turbo
-  // block chaining. All "" / 0 when unknown (block data missing, or last trip of the block).
-  string next_line_public_number = 18; // e.g. "47" — the line this vehicle becomes next
-  string next_destination = 19;        // headsign of the next trip
-  int64 next_start_unix = 20;          // scheduled start of the next trip (unix seconds; 0 if unknown)
+  // 18–20 were the removed next-trip prediction fields; never reuse the numbers.
+  reserved 18, 19, 20;
+  reserved "next_line_public_number", "next_destination", "next_start_unix";
 }
 
 // Lightweight position delta for a vehicle already in view.

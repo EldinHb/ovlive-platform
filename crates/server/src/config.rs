@@ -17,11 +17,6 @@ pub struct Config {
 
     pub zmq_kv6_endpoint: String,
     pub zmq_kv6_topics: Vec<String>,
-    /// KV78Turbo feed (`KV8passtimes`) — powers next-line prediction. Disable with
-    /// `ZMQ_KV78_ENABLED=false` to skip the extra SUB connection + parsing.
-    pub zmq_kv78_enabled: bool,
-    pub zmq_kv78_endpoint: String,
-    pub zmq_kv78_topics: Vec<String>,
     /// NS InfoPlus train positions (`NStreinpositiesInterface5`). Trains are not in KV6 at
     /// all, so this is the only source for them; disable with `ZMQ_NS_ENABLED=false` to skip
     /// the extra SUB connection.
@@ -41,9 +36,6 @@ pub struct Config {
     /// Curves are published well ahead of a run, so this is generously longer than the block
     /// index's window.
     pub train_delay_prune_secs: i64,
-    /// Drop journeys from the block index not seen within this window (seconds). KV78Turbo
-    /// only publishes a near-future horizon, so this bounds memory.
-    pub block_prune_secs: i64,
     /// Reconnect the realtime SUB socket if no frame arrives within this many seconds
     /// (watchdog for silently-dead connections). See `StreamConfig::idle_timeout`.
     pub zmq_idle_timeout_secs: u64,
@@ -101,7 +93,6 @@ fn env_parse<T: FromStr>(key: &str, default: T) -> T {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let topics = env_or("ZMQ_KV6_TOPICS", "");
-        let kv78_topics = env_or("ZMQ_KV78_TOPICS", "/GOVI/KV8passtimes/");
         // Port 7664 carries ten InfoPlus envelopes; we take exactly the two we use — positions
         // and the RitInfo punctuality curves — over one connection, leaving the rest off the
         // socket entirely.
@@ -132,13 +123,6 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
-            zmq_kv78_enabled: env_parse("ZMQ_KV78_ENABLED", true),
-            zmq_kv78_endpoint: env_or("ZMQ_KV78_ENDPOINT", "tcp://pubsub.besteffort.ndovloket.nl:7817"),
-            zmq_kv78_topics: kv78_topics
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
             zmq_ns_enabled: env_parse("ZMQ_NS_ENABLED", true),
             zmq_ns_endpoint: env_or("ZMQ_NS_ENDPOINT", "tcp://pubsub.besteffort.ndovloket.nl:7664"),
             zmq_ns_topics: ns_topics
@@ -149,7 +133,6 @@ impl Config {
             ns_max_fix_age_secs: env_parse("NS_MAX_FIX_AGE_SECS", 180),
             zmq_ns_rit_enabled: env_parse("ZMQ_NS_RIT_ENABLED", true),
             train_delay_prune_secs: env_parse("TRAIN_DELAY_PRUNE_SECS", 21_600),
-            block_prune_secs: env_parse("BLOCK_PRUNE_SECS", 1800),
             zmq_idle_timeout_secs: env_parse("ZMQ_IDLE_TIMEOUT_SECS", 60),
 
             stale_trip_secs: env_parse("STALE_TRIP_SECS", 240),

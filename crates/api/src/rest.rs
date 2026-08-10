@@ -207,8 +207,7 @@ pub async fn list_vehicles(
     Json(json!({ "count": vehicles.len(), "total": total, "vehicles": vehicles })).into_response()
 }
 
-/// GET /v1/vehicles/:id — the parts of a vehicle's detail that change: position, delay, and
-/// the predicted next trip.
+/// GET /v1/vehicles/:id — the parts of a vehicle's detail that change: position and delay.
 ///
 /// This is the polled half of the vehicle view. The schedule half — route shape and stop
 /// list — is constant for the duration of a trip and lives at `/v1/vehicles/:id/trip`, keyed
@@ -225,18 +224,9 @@ pub async fn vehicle_detail(
     };
     let vehicle = VehicleJson::from(&trip);
 
-    let next_trip = crate::convert::predict_next(&state.blocks, &trip).map(|n| {
-        json!({
-            "line_public_number": n.line_public_number,
-            "destination": n.destination,
-            "start_unix": n.start.timestamp(),
-        })
-    });
-
     Json(json!({
         "vehicle": vehicle,
         "trip_id": trip.matched_trip_id,
-        "next_trip": next_trip,
     }))
     .into_response()
 }

@@ -37,7 +37,6 @@ services:
       GTFS_REFRESH_TZ: Europe/Amsterdam
       GTFS_REFRESH_HOUR: "3"
       ZMQ_KV6_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7658
-      ZMQ_KV78_ENDPOINT: tcp://pubsub.besteffort.ndovloket.nl:7817
       ADMIN_EMAIL: admin@example.com
       ADMIN_PASSWORD: change-me-please
     volumes:

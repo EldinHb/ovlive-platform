@@ -19,7 +19,7 @@ origin, so there is one hostname, no CORS, and a same-origin WebSocket.
   75k stops). Budget 5 GB for the stack.
 - **~1.5 GB disk** on the `ovlive-data` volume: the cached feed (~232 MiB) plus snapshots.
 - **Outbound** access to `gtfs.ovapi.nl:443` and
-  `pubsub.besteffort.ndovloket.nl` on ports `7658`, `7664`, `7817`.
+  `pubsub.besteffort.ndovloket.nl` on ports `7658` and `7664`.
 - No inbound port is needed if you use the Cloudflare Tunnel option below.
 
 ## 1. Get the images

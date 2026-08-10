@@ -45,7 +45,7 @@ pub struct StopInfo {
     pub name: String,
     pub lat: f64,
     pub lon: f64,
-    /// `stops.txt.stop_code` — the operator's stop code. **This is what KV6/KV78 call
+    /// `stops.txt.stop_code` — the operator's stop code. **This is what KV6 calls
     /// `UserStopCode`**, so it (not `stop_id`) is the join key for realtime stop passages.
     pub code: Option<String>,
     pub platform_code: Option<String>,

@@ -8,7 +8,6 @@ import {
   isoToClock,
   resolveOperator,
   secsToClock,
-  unixToClock,
   updateAge,
 } from "../lib/format";
 import { expectedTime, upcomingStops } from "../lib/trip";
@@ -216,19 +215,6 @@ export function VehiclePanel({
   const type = basic?.type ?? 0;
   const typeText = t(TYPE_KEYS[type] ?? "type.vehicle");
 
-  // Predicted next line this vehicle becomes (KV78Turbo block/omloop chaining). Prefer the
-  // REST detail's next_trip; fall back to the WS VehicleState fields carried on `basic`.
-  const next =
-    detail?.next_trip && detail.next_trip.line_public_number
-      ? {
-          line: detail.next_trip.line_public_number,
-          dest: detail.next_trip.destination,
-          start: detail.next_trip.start_unix,
-        }
-      : basic?.nextLine
-        ? { line: basic.nextLine, dest: basic.nextDestination, start: basic.nextStart }
-        : null;
-
   const vehLat = basic?.lat ?? v?.lat;
   const vehLon = basic?.lon ?? v?.lon;
   const reportsAtStop = basic?.atStop ?? v?.at_stop ?? false;
@@ -415,21 +401,6 @@ export function VehiclePanel({
         </div>
 
         {v?.last_update && <LastUpdate iso={v.last_update} now={now} t={t} />}
-
-        {next && (
-          <div className="next-trip">
-            <div className="next-trip-label">→ {t("next.title")}</div>
-            <div className="next-trip-row">
-              <span className="vpanel-line sm" style={{ background: op.style.bg, color: op.style.fg }}>
-                {next.line}
-              </span>
-              <span className="next-trip-dest">{next.dest || "—"}</span>
-              {next.start ? (
-                <span className="next-trip-time">{t("next.at", { time: unixToClock(next.start) })}</span>
-              ) : null}
-            </div>
-          </div>
-        )}
 
         <h3 className="section-title">{t("stops.next")}</h3>
         {!trip && <div className="vpanel-sub">{t("stops.loading")}</div>}

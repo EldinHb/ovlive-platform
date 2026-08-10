@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono_tz::Tz;
 use dashmap::DashMap;
 use governor::{DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota, RateLimiter};
-use ovlive_core::{BlockStore, LiveState, VehicleIndex};
+use ovlive_core::{LiveState, VehicleIndex};
 use ovlive_gtfs::GtfsService;
 use ovlive_persist::Db;
 use tokio::sync::watch;
@@ -19,8 +19,6 @@ pub struct AppState {
     pub live: Arc<LiveState>,
     /// Currently loaded GTFS feed (for enrichment + detail lookups).
     pub gtfs: Arc<GtfsService>,
-    /// Live block index (KV78Turbo) for next-line prediction.
-    pub blocks: Arc<BlockStore>,
     /// Accounts + API keys.
     pub db: Db,
     /// Latest spatial snapshot, republished each server tick.
