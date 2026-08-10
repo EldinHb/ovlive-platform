@@ -81,6 +81,12 @@ impl Builder {
     fn build(self) -> Option<PosEvent> {
         let dataowner = self.dataowner?;
         let vehicle_number = self.vehicle_number?;
+        // BISON uses 0 for "vehicle unknown" (seen live on a RET metro, 1/155 records).
+        // Every such record would share one key ("RET:0"), so concurrent journeys would
+        // endlessly replace each other via the journey-change rule. Unkeyable — drop it.
+        if vehicle_number == "0" {
+            return None;
+        }
         Some(PosEvent {
             key: VehicleKey {
                 dataowner,
@@ -208,6 +214,39 @@ mod tests {
     #[test]
     fn skips_record_without_vehicle() {
         let xml = r#"<KV6posinfo><END><dataownercode>RET</dataownercode></END></KV6posinfo>"#;
+        assert_eq!(parse_kv6(xml).len(), 0);
+    }
+
+    /// A RET metro record as measured live (2026-08-10): station lifecycle with punctuality
+    /// but no rd-x/rd-y at all, or the literal -1 "unknown". Neither may yield a position —
+    /// the schedule anchor in `ovlive-core` takes over from there.
+    #[test]
+    fn metro_records_parse_with_no_position() {
+        let xml = r#"<KV6posinfo>
+          <ARRIVAL><dataownercode>RET</dataownercode><lineplanningnumber>M008</lineplanningnumber>
+            <operatingday>2026-08-10</operatingday><journeynumber>457295</journeynumber>
+            <userstopcode>HA8096</userstopcode><timestamp>2026-08-10T10:21:26.5881338+02:00</timestamp>
+            <vehiclenumber>5342</vehiclenumber><punctuality>11</punctuality></ARRIVAL>
+          <ONROUTE><dataownercode>RET</dataownercode><lineplanningnumber>M007</lineplanningnumber>
+            <operatingday>2026-08-10</operatingday><journeynumber>456803</journeynumber>
+            <timestamp>2026-08-10T10:21:26.72855+02:00</timestamp><vehiclenumber>5602</vehiclenumber>
+            <punctuality>-3</punctuality><rd-x>-1</rd-x><rd-y>-1</rd-y></ONROUTE>
+        </KV6posinfo>"#;
+        let evs = parse_kv6(xml);
+        assert_eq!(evs.len(), 2);
+        for e in &evs {
+            assert_eq!((e.rd_x, e.rd_y), (None, None));
+            assert!(e.punctuality.is_some());
+        }
+        assert_eq!(evs[0].operating_day.as_deref(), Some("2026-08-10"));
+    }
+
+    /// BISON's "vehicle unknown" marker: all such records would collide on one key.
+    #[test]
+    fn skips_the_unknown_vehicle_marker() {
+        let xml = r#"<KV6posinfo><ONSTOP><dataownercode>RET</dataownercode>
+          <lineplanningnumber>M009</lineplanningnumber><journeynumber>457559</journeynumber>
+          <vehiclenumber>0</vehiclenumber><punctuality>94</punctuality></ONSTOP></KV6posinfo>"#;
         assert_eq!(parse_kv6(xml).len(), 0);
     }
 }

@@ -29,6 +29,7 @@ function toVehicle(s: any): Vehicle {
     journey: s.journey_number || "",
     atStop: !!s.at_stop,
     currentStopId: s.current_stop_id || "",
+    schedulePositioned: !!s.schedule_positioned,
     lineColor: s.line_color || "",
     lineTextColor: s.line_text_color || "",
   };
@@ -44,6 +45,7 @@ function toMove(m: any): MoveDelta {
     delayKnown: !!m.delay_known,
     atStop: !!m.at_stop,
     currentStopId: m.current_stop_id || "",
+    schedulePositioned: !!m.schedule_positioned,
   };
 }
 

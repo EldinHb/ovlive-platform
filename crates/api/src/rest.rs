@@ -69,6 +69,9 @@ pub struct VehicleJson {
     pub journey_number: Option<String>,
     pub at_stop: bool,
     pub current_stop_id: Option<String>,
+    /// `lat`/`lon` is a schedule-anchored station position, not a GPS fix — RET metros
+    /// publish no coordinates, so their dot marks the last confirmed station call.
+    pub schedule_positioned: bool,
     pub line_color: Option<String>,
     pub line_text_color: Option<String>,
     pub last_update: chrono::DateTime<chrono::Utc>,
@@ -95,6 +98,7 @@ impl From<&LiveTrip> for VehicleJson {
             journey_number: t.journey_number.clone(),
             at_stop: t.at_stop,
             current_stop_id: t.current_stop_id.clone(),
+            schedule_positioned: t.schedule_positioned,
             line_color: t.line_color.clone(),
             line_text_color: t.line_text_color.clone(),
             last_update: t.last_update,

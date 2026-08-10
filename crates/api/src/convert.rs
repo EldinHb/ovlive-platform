@@ -46,6 +46,7 @@ pub fn to_state(t: &LiveTrip) -> pb::VehicleState {
         current_stop_id: t.current_stop_id.clone().unwrap_or_default(),
         line_color: t.line_color.clone().unwrap_or_default(),
         line_text_color: t.line_text_color.clone().unwrap_or_default(),
+        schedule_positioned: t.schedule_positioned,
     }
 }
 
@@ -59,6 +60,7 @@ pub fn to_move(t: &LiveTrip) -> pb::VehicleMove {
         delay_known: t.delay_known,
         at_stop: t.at_stop,
         current_stop_id: t.current_stop_id.clone().unwrap_or_default(),
+        schedule_positioned: t.schedule_positioned,
     }
 }
 
