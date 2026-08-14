@@ -496,8 +496,28 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.on("error", (e) => console.warn("map error", e?.error?.message ?? e));
 
-    // Add vehicle layers once the basemap style is ready, then re-sync the viewport.
-    map.on("load", () => {
+    // Declared before the "style.load" handler that calls it: an inline style object (the raster
+    // OSM theme) is current almost immediately, so that handler can run far earlier than the old
+    // "load" one ever did — early enough to hit this binding's temporal dead zone.
+    const resync = () => {
+      clientRef.current?.update(boundsToBBox(map), Math.round(map.getZoom()), filtersRef.current);
+      const c = map.getCenter();
+      setSavedView({ lng: c.lng, lat: c.lat, zoom: map.getZoom() });
+      void loadStops(map);
+    };
+
+    // Add vehicle layers as soon as the style is current, then re-sync the viewport.
+    //
+    // "style.load", never "load". `load` waits for the stylesheet *and* for the basemap's own
+    // tile source to report ready; it also fires at most once. So when the third-party basemap
+    // host is slow or unreachable — a browser content blocker filtering tiles.versatiles.org is
+    // the common case — it never arrives, ensureLayers never runs, and the vehicle/stop/route
+    // layers are never created at all. That turns a degraded basemap into a total blackout and
+    // makes the promise two lines below ("data flows even if tiles are slow") false: the stream
+    // kept filling featuresRef and the header kept counting, with nothing to draw into.
+    // `style.load` needs only the stylesheet, which is all ensureLayers depends on, and is the
+    // signal the theme swap already trusted — so a theme change re-adds the layers through here.
+    map.on("style.load", () => {
       ensureLayers(map);
       resync();
     });
@@ -558,12 +578,6 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     client.connect(boundsToBBox(map), Math.round(map.getZoom()), filtersRef.current);
 
     // Re-sync viewport when the user pans/zooms or the map is resized; persist location.
-    const resync = () => {
-      clientRef.current?.update(boundsToBBox(map), Math.round(map.getZoom()), filtersRef.current);
-      const c = map.getCenter();
-      setSavedView({ lng: c.lng, lat: c.lat, zoom: map.getZoom() });
-      void loadStops(map);
-    };
     map.on("moveend", resync);
     map.on("resize", resync);
 
@@ -640,8 +654,9 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     // Diffing (the default) removes our sources and layers, because they are in the outgoing
     // style and in no incoming one, and then fires neither "style.load" nor a usable
     // "styledata" — leaving a fresh basemap with no vehicles, stops or route until a reload.
+    // The persistent "style.load" handler registered on mount re-adds the layers, so there is
+    // no per-swap listener here — one handler, one place that builds them.
     map.setStyle(withGlyphs(props.theme.style), { diff: false });
-    map.once("style.load", () => ensureLayers(map));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.theme.id]);
 
