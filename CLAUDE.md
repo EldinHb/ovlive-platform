@@ -390,6 +390,22 @@ Consequences, so this isn't rediscovered the hard way:
   `scheduled_departure + delay` has passed. Deriving it client-side also makes the list drop stops
   as the local clock ticks rather than at the next poll. Prefer this split when adding to the
   vehicle view: ask whether the field can change mid-trip, and put it in the static half if not.
+- **A vehicle has two views, and they share their content by construction.** The map's panel
+  (`VehiclePanel`) and the standalone page (`routes/vehicle.tsx`, `/vehicle/<id>`, opened in a
+  new tab from the panel's link chip) both render `VehicleInfo.tsx` — one `vehicleView()` that
+  resolves every field from the live frame, the poll and the plan, plus the identity/meta/stops
+  components. Add a field there, not to one of the two, or the views drift. The page's own parts
+  are its layout, `VehicleMap`, and where its live data comes from: **`useVehicleLive` subscribes
+  to a degenerate viewport with the id `pinned`**, so the server streams exactly one vehicle at
+  the tick rate instead of the fleet around it. Vehicle ids contain `:`, so links must encode the
+  segment (`vehiclePagePath`). Deep-linking the page relies on nginx's SPA fallback — already
+  there for `/`, and the reason `/vehicle/<id>` doesn't 404 on a cold open.
+- **A deep link selects; it never turns a filter on.** `/?v=<id>` selects, follows and centres
+  a vehicle — it used to also force isolate, which meant arriving (from a shared link, or back
+  from a vehicle page) at a map with every other vehicle hidden and a toggle on that the user
+  never set. Isolate now comes on for exactly one reason: `&only=1`, which the vehicle page's
+  return link carries when the map *had* it on, having received it as `/vehicle/<id>?only=1`.
+  The page itself doesn't act on that param — it has no fleet to filter — it only hands it back.
 - **The stop layer is REST, not the live stream.** Stops change only when the daily GTFS feed
   swaps, so `MapView` fetches `GET /v1/stops/viewport` (supported; unrelated to the deprecated
   `/v1/stops`) for a box padded 35% around the view and re-asks only when the user pans outside
