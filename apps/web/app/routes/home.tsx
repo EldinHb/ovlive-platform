@@ -214,14 +214,20 @@ function MapApp() {
   }, [stopId, rest]);
 
   // Deep link: `?v=<id>` opens with that vehicle selected and followed (selectVehicle sets
-  // following), isolated so only it shows, and centred (focusIdRef → the detail fetch flies
-  // to it). Runs once on mount.
+  // following) and centred (focusIdRef → the detail fetch flies to it). Runs once on mount.
+  //
+  // It deliberately does NOT turn isolate on. Isolate is a filter the user sets, and forcing
+  // it on arrival hides every other vehicle for someone who never asked — which is what a
+  // return from a vehicle page looked like. `&only=1` is the one way it comes on here: the
+  // vehicle page's link back hands over the isolate state the map had when it was opened, so
+  // the user gets their own setting back rather than ours.
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("v");
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("v");
     if (id) {
       focusIdRef.current = id;
       selectVehicle(id, undefined);
-      setIsolate(true);
+      if (q.get("only") === "1") setIsolate(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -230,6 +230,9 @@ button { font-family: inherit; cursor: pointer; }
   display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px;
   font-size: 13px; font-weight: 600; border: 1px solid var(--border); background: transparent; color: var(--text);
   transition: background .15s;
+  /* One chip is an anchor (the vehicle page opens in a new tab); it must read as a chip, not
+     as body-text link. */
+  text-decoration: none;
 }
 .follow-chip:not(.live):not(.active):hover { background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .follow-chip.live { color: var(--ontime); border-color: transparent; background: rgba(52,199,89,.14); }
@@ -446,8 +449,41 @@ button { font-family: inherit; cursor: pointer; }
 
 @keyframes slideup { from { transform: translateY(30px); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* Detail page */
+/* --- Vehicle page (/vehicle/<id>) ---
+   Phone-first: a map you can see at a glance, with the details scrolling under it as one
+   page. From 900px the two stop competing for the same column — the map takes the space it
+   is actually useful at, and the details become a fixed side column that scrolls on its own. */
 .detail-root { min-height: 100vh; background: var(--bg); }
+.detail-bar {
+  position: sticky; top: 0; z-index: 6;
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--panel); backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--border);
+}
+.detail-bar .brand { margin-left: auto; }
+.back { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); text-decoration: none; font-weight: 500; }
 .detail-map { height: 42vh; position: relative; }
-.detail-content { max-width: 640px; margin: 0 auto; padding: 24px 20px 60px; }
-.back { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); text-decoration: none; font-weight: 500; margin-bottom: 16px; }
+.detail-content { max-width: 640px; margin: 0 auto; padding: 20px 18px 60px; }
+.detail-head { padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.detail-content .ended-banner { margin-bottom: 16px; }
+
+/* The vehicle's marker on the page's map. One vehicle, so it is a DOM element rather than a
+   baked icon (see VehicleMap) — but it wears the same neutral pill the map's markers do. */
+.vmark {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px; border-radius: 7px; border: 1px solid;
+  font-family: var(--font); font-size: 13px; font-weight: 700; line-height: 1;
+  white-space: nowrap; box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+.vmark-owner { font-size: 11px; font-weight: 600; opacity: .8; }
+
+@media (min-width: 900px) {
+  .detail-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  .detail-main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+  .detail-map { height: auto; }
+  .detail-content {
+    max-width: none; margin: 0; padding: 22px 22px 40px; overflow-y: auto;
+    background: var(--panel-solid); border-left: 1px solid var(--border);
+  }
+}

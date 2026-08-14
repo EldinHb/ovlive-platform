@@ -9,7 +9,7 @@ import {
   type StopSummary,
   type Vehicle,
 } from "@ovlive/api-types";
-import { markerPalette, type MapTheme, type MarkerPalette } from "../lib/styles";
+import { LABEL_FONT, markerPalette, withGlyphs, type MapTheme, type MarkerPalette } from "../lib/styles";
 import { resolveOperator } from "../lib/format";
 import { API_BASE, DEFAULT_ZOOM, NL_CENTER, getSavedView, setSavedView } from "../lib/config";
 
@@ -44,10 +44,6 @@ interface Props {
   onStatus: (s: ConnStatus) => void;
 }
 
-const GLYPHS = "https://tiles.versatiles.org/assets/glyphs/{fontstack}/{range}.pbf";
-// Fontstack served by GLYPHS — and by the remote VersaTiles styles, which use the same
-// endpoint, so one name works on every theme.
-const LABEL_FONT = ["noto_sans_regular"];
 // Zoom at which markers switch from a coloured dot to the boxed operator+line pill.
 const LOGO_ZOOM = 11;
 
@@ -795,12 +791,6 @@ function stopFeature(s: StopSummary): GeoJSON.Feature {
     geometry: { type: "Point", coordinates: [s.lon, s.lat] },
     properties: { stopId: s.stop_id, name },
   };
-}
-
-/** Ensure a glyphs endpoint so text labels render on every theme (incl. raster OSM). */
-function withGlyphs(style: MapTheme["style"]): any {
-  if (typeof style === "string") return style; // remote styles bring their own glyphs
-  return { ...style, glyphs: GLYPHS };
 }
 
 const MARKER_DPR = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2) : 2;

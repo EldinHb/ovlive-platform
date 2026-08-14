@@ -1,3 +1,8 @@
-import { type RouteConfig, index } from "@react-router/dev/routes";
+import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
-export default [index("routes/home.tsx")] satisfies RouteConfig;
+export default [
+  index("routes/home.tsx"),
+  // A vehicle on its own page. The id contains `:` (`<dataowner>:<vehicle number>`), so links
+  // to it must encode the segment — see `vehiclePagePath`.
+  route("vehicle/:id", "routes/vehicle.tsx"),
+] satisfies RouteConfig;

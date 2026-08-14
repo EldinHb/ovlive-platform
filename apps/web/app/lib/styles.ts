@@ -31,6 +31,19 @@ export interface MapTheme {
   dark: boolean;
 }
 
+const GLYPHS = "https://tiles.versatiles.org/assets/glyphs/{fontstack}/{range}.pbf";
+/**
+ * Fontstack served by GLYPHS — and by the remote VersaTiles styles, which use the same
+ * endpoint, so one name works on every theme.
+ */
+export const LABEL_FONT = ["noto_sans_regular"];
+
+/** Ensure a glyphs endpoint so text labels render on every theme (incl. raster OSM). */
+export function withGlyphs(style: MapTheme["style"]): string | StyleSpecification {
+  if (typeof style === "string") return style; // remote styles bring their own glyphs
+  return { ...style, glyphs: GLYPHS };
+}
+
 export const THEMES: MapTheme[] = [
   { id: "colorful", label: "Colorful", style: COLORFUL_STYLE, dark: false },
   { id: "neutrino", label: "Neutrino", style: NEUTRINO_STYLE, dark: false },
