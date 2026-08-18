@@ -19,7 +19,7 @@ import {
   updateAge,
   type Operator,
 } from "../lib/format";
-import { expectedTime, upcomingStops } from "../lib/trip";
+import { expectedTime, upcomingFromIndex } from "../lib/trip";
 import type { TFn } from "../lib/i18n";
 
 const TYPE_KEYS = ["type.vehicle", "type.bus", "type.tram", "type.metro", "type.train", "type.ferry"];
@@ -55,6 +55,12 @@ export interface VehicleView {
   atStop: boolean;
   /** The calls still ahead, from the trip plan; empty until the plan has loaded. */
   stops: TripStop[];
+  /**
+   * Where `stops` starts within the trip's whole call list. Stops are numbered from the trip's
+   * first call, not from the vehicle's next one, so the first entry of `stops` is number
+   * `upcomingFrom + 1`. The maps take the same index to decide what to mute.
+   */
+  upcomingFrom: number;
 }
 
 export interface ViewInput {
@@ -93,7 +99,10 @@ export function vehicleView({ id, basic, detail, trip, ended = false, now, t }: 
   // the vehicle is now, so it's derived here rather than asked of the server on every poll.
   // Recomputed as the clock ticks, so a stop drops off the list the moment it's behind us
   // instead of at the next poll.
-  const stops = trip ? upcomingStops(trip.stops, { lat, lon, atStop: reportsAtStop, delay }, now) : [];
+  const upcomingFrom = trip
+    ? upcomingFromIndex(trip.stops, { lat, lon, atStop: reportsAtStop, delay }, now)
+    : 0;
+  const stops = trip ? trip.stops.slice(upcomingFrom) : [];
 
   return {
     id,
@@ -126,6 +135,7 @@ export function vehicleView({ id, basic, detail, trip, ended = false, now, t }: 
       lon != null &&
       distanceMeters(lat, lon, stops[0].lat, stops[0].lon) <= AT_STOP_RADIUS_M,
     stops,
+    upcomingFrom,
   };
 }
 
@@ -224,6 +234,11 @@ export function UpcomingStops({
       <ul className="stops">
         {view.stops.map((s, i) => {
           const current = view.atStop && i === 0; // vehicle is at the first not-yet-departed stop
+          // Counted from the trip's first call, not from this list — the stops behind the
+          // vehicle keep their numbers, so "stop 4" means the same thing here, on the map and
+          // an hour into the trip. (GTFS `stop_sequence` can't be it: it only has to increase
+          // along the trip, so it is not a position.)
+          const number = view.upcomingFrom + i + 1;
           // Expected is the schedule shifted by the vehicle's live delay — the endpoint
           // sends schedule only, precisely so it doesn't have to be re-sent as the delay
           // moves.
@@ -236,6 +251,9 @@ export function UpcomingStops({
           const eta = etaSeconds(arrival, now);
           return (
             <li key={s.stop_id + s.stop_sequence} className={current ? "current" : ""}>
+              <span className="stop-num" title={t("stops.nth", { n: number })}>
+                {number}
+              </span>
               <span className="stop-name">
                 {current && <span className="stop-now">{t("atStop.badge")}</span>}
                 <span className="stop-label">{s.name}</span>
