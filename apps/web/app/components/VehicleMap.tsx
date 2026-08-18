@@ -10,7 +10,8 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import type { TripStop } from "@ovlive/api-types";
 import { NL_CENTER } from "../lib/config";
-import { LABEL_FONT, markerPalette, withGlyphs, type MapTheme } from "../lib/styles";
+import { LABEL_FONT, markerPalette, tripStopPalette, withGlyphs, type MapTheme } from "../lib/styles";
+import { tripStopFeatures } from "../lib/trip";
 
 /** Close enough to read the street the vehicle is on, wide enough to see the next stops. */
 const DETAIL_ZOOM = 14;
@@ -30,14 +31,28 @@ interface Props {
   /** Null until the first position (live frame or REST detail) arrives. */
   vehicle: MapVehicle | null;
   routeShape: [number, number][] | null;
-  /** Every scheduled call on the trip, drawn as ringed dots along the route. */
+  /** Every scheduled call on the trip, drawn as numbered dots along the route. */
   stops: TripStop[];
+  /**
+   * Index of the first call the vehicle still has to make (`vehicleView().upcomingFrom`) —
+   * those are highlighted, the ones behind it are muted. Passed in rather than derived so the
+   * page's panel and its map always agree on where the vehicle is in its trip.
+   */
+  upcomingFrom: number;
   /** Keep the camera on the vehicle. Cleared by `onDetach` as soon as the user pans away. */
   following: boolean;
   onDetach: () => void;
 }
 
-export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDetach }: Props) {
+export function VehicleMap({
+  theme,
+  vehicle,
+  routeShape,
+  stops,
+  upcomingFrom,
+  following,
+  onDetach,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map>();
   const markerRef = useRef<maplibregl.Marker>();
@@ -51,6 +66,8 @@ export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDet
   routeRef.current = routeShape;
   const stopsRef = useRef(stops);
   stopsRef.current = stops;
+  const upcomingFromRef = useRef(upcomingFrom);
+  upcomingFromRef.current = upcomingFrom;
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const followingRef = useRef(following);
@@ -72,17 +89,41 @@ export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDet
         layout: { "line-cap": "round", "line-join": "round" },
       });
     }
+    // Numbered dots: solid accent for the calls still ahead, hollow and muted for the ones
+    // already served. Same palette and thresholds as the map's own trip-stop layer.
+    const pal = tripStopPalette(dark);
     if (!map.getLayer("trip-stops-dot")) {
       map.addLayer({
         id: "trip-stops-dot",
         type: "circle",
         source: "trip-stops",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3, 16, 6],
-          // A hollow ring, like the map's stop layer, so a stop never reads as a vehicle.
-          "circle-color": dark ? "#12161b" : "#ffffff",
-          "circle-stroke-color": "#0071e3",
-          "circle-stroke-width": 2,
+          // Big enough from STOP_LABEL_ZOOM up to hold two digits; a plain dot below it.
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, STOP_LABEL_ZOOM, 9, 16, 11],
+          "circle-color": ["case", ["get", "upcoming"], pal.accent, pal.bg],
+          "circle-stroke-color": ["case", ["get", "upcoming"], pal.bg, pal.muted],
+          "circle-stroke-width": 1.5,
+          "circle-opacity": ["case", ["get", "upcoming"], 1, 0.85],
+        },
+      });
+    }
+    if (!map.getLayer("trip-stops-num")) {
+      map.addLayer({
+        id: "trip-stops-num",
+        type: "symbol",
+        source: "trip-stops",
+        minzoom: STOP_LABEL_ZOOM,
+        layout: {
+          "text-field": ["get", "n"],
+          "text-font": LABEL_FONT,
+          "text-size": ["interpolate", ["linear"], ["zoom"], STOP_LABEL_ZOOM, 9, 16, 11],
+          // The number belongs to its dot — a dropped one would read as a different kind of
+          // stop rather than as a crowded label.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": ["case", ["get", "upcoming"], pal.onAccent, pal.muted],
         },
       });
     }
@@ -97,12 +138,14 @@ export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDet
           "text-font": LABEL_FONT,
           "text-size": 11,
           "text-anchor": "left",
-          "text-offset": [0.7, 0],
+          // Clear of the dot, which is now wide enough to hold the stop's number.
+          "text-offset": [1.3, 0],
           "text-max-width": 12,
           "text-padding": 3,
         },
         paint: {
-          "text-color": dark ? "#e6e9ee" : "#2b3038",
+          // Stops already served step back so the ones still to come lead the eye.
+          "text-color": ["case", ["get", "upcoming"], dark ? "#e6e9ee" : "#2b3038", pal.muted],
           "text-halo-color": dark ? "rgba(0,0,0,.75)" : "rgba(255,255,255,.9)",
           "text-halo-width": 1.2,
         },
@@ -127,16 +170,7 @@ export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDet
   function pushStops(map: maplibregl.Map) {
     const src = map.getSource("trip-stops") as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
-    src.setData({
-      type: "FeatureCollection",
-      features: stopsRef.current.map((s) => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [s.lon, s.lat] },
-        // gtfs-nl names stops "<place>, <stop>"; the place is obvious from the basemap at the
-        // zoom where labels appear, and repeating it wraps most of them onto two lines.
-        properties: { name: s.name.replace(/^[^,]+,\s*/, "") },
-      })),
-    });
+    src.setData(tripStopFeatures(stopsRef.current, upcomingFromRef.current));
   }
 
   // --- Map lifecycle (once) ---
@@ -238,11 +272,13 @@ export function VehicleMap({ theme, vehicle, routeShape, stops, following, onDet
     if (map) pushRoute(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeShape]);
+  // `upcomingFrom` is a number, so this redraws when the vehicle passes a stop — not on every
+  // one of the page's per-second re-renders.
   useEffect(() => {
     const map = mapRef.current;
     if (map) pushStops(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stops]);
+  }, [stops, upcomingFrom]);
 
   return <div ref={containerRef} className="maplibregl-map" />;
 }

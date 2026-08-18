@@ -5,6 +5,7 @@ import {
   type FilterState,
   type StopDeparture,
   type StopDeparturesResponse,
+  type TripStop,
   type Vehicle,
   type VehicleDetail,
   type VehicleSummary,
@@ -44,6 +45,8 @@ export default function Home() {
 }
 
 const EMPTY_FILTERS: FilterState = { types: [], owners: [], search: "" };
+/** Stable empty list, so a selection without a plan doesn’t hand the map a new array every render. */
+const NO_STOPS: TripStop[] = [];
 const MAX_SELECTED = 8;
 /** Enough hits to choose from, small enough to stay a light request per keystroke. */
 const SEARCH_LIMIT = 25;
@@ -406,6 +409,7 @@ function MapApp() {
         showStops={showStops}
         selectedStopId={stopId}
         routeShape={trip?.route_shape ?? null}
+        tripStops={trip?.stops ?? NO_STOPS}
         onSelectStop={openStop}
         onSelectVehicle={selectVehicle}
         onSelectedLive={onSelectedLive}

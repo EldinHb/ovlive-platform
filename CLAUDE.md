@@ -406,6 +406,18 @@ Consequences, so this isn't rediscovered the hard way:
   never set. Isolate now comes on for exactly one reason: `&only=1`, which the vehicle page's
   return link carries when the map *had* it on, having received it as `/vehicle/<id>?only=1`.
   The page itself doesn't act on that param — it has no fleet to filter — it only hands it back.
+- **A selected vehicle's calls are drawn as numbered dots, numbered from the trip's first stop.**
+  Both maps (`MapView`'s `trip-stops-*` layers, and the vehicle page's `VehicleMap`) draw the
+  *whole* plan: solid accent for the calls still ahead, hollow and muted for the ones already
+  served — the served ones are what make "the 4th stop" read as a position rather than a count of
+  what's left. The number is the stop's 1-based index in `VehicleTripPlan.stops`, **never GTFS
+  `stop_sequence`**, which only has to increase along a trip and is therefore not a position.
+  Where the split falls is `upcomingFromIndex` (`apps/web/app/lib/trip.ts`) — the same derivation
+  behind the panel's list, so a stop can't be ahead in one view and behind in the other: the page
+  hands `vehicleView().upcomingFrom` to its map, while `MapView` re-derives it from the live frame
+  on the tick and rebuilds the layer only once the vehicle has actually passed a stop (the
+  FeatureCollection is the expensive half, the check is one pass over the calls). Numbers appear
+  from zoom 12.5, where the dot is wide enough to hold two digits.
 - **The stop layer is REST, not the live stream.** Stops change only when the daily GTFS feed
   swaps, so `MapView` fetches `GET /v1/stops/viewport` (supported; unrelated to the deprecated
   `/v1/stops`) for a box padded 35% around the view and re-asks only when the user pans outside

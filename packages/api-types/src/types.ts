@@ -208,7 +208,8 @@ export interface TripStop {
  * response's `trip_id` changes.
  *
  * `stops` is the **whole** trip; the calls still ahead are filtered client-side from the
- * vehicle's live position (see `upcomingStops` in the web app).
+ * vehicle's live position (see `upcomingFromIndex` in the web app), which also numbers them:
+ * a stop's number is its 1-based index here, so it doesn't change as the trip is worked through.
  */
 export interface VehicleTripPlan {
   trip_id: string | null;

@@ -55,6 +55,22 @@ export const THEMES: MapTheme[] = [
 
 export const DEFAULT_THEME = THEMES[0];
 
+/**
+ * The numbered stop dots drawn along a selected vehicle's trip, on both maps: solid accent for
+ * the calls still ahead, a hollow muted dot for the ones already served. Shared so the map's
+ * panel view and the vehicle page can't end up disagreeing about what "still to come" looks
+ * like. `bg` doubles as the fill of a served stop and as the separating ring of an upcoming
+ * one, so a dot never blends into the route line under it.
+ */
+export function tripStopPalette(dark: boolean) {
+  return {
+    accent: "#0071e3",
+    onAccent: "#ffffff",
+    bg: dark ? "#12161b" : "#ffffff",
+    muted: dark ? "#7c858f" : "#98a1ab",
+  };
+}
+
 /** Fill, text and border of a vehicle marker (dot at low zoom, pill at high zoom). */
 export interface MarkerPalette {
   bg: string;

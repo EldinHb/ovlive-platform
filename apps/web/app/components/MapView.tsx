@@ -7,10 +7,19 @@ import {
   type ConnStatus,
   type FilterState,
   type StopSummary,
+  type TripStop,
   type Vehicle,
 } from "@ovlive/api-types";
-import { LABEL_FONT, markerPalette, withGlyphs, type MapTheme, type MarkerPalette } from "../lib/styles";
+import {
+  LABEL_FONT,
+  markerPalette,
+  tripStopPalette,
+  withGlyphs,
+  type MapTheme,
+  type MarkerPalette,
+} from "../lib/styles";
 import { resolveOperator } from "../lib/format";
+import { tripStopFeatures, upcomingFromIndex } from "../lib/trip";
 import { API_BASE, DEFAULT_ZOOM, NL_CENTER, getSavedView, setSavedView } from "../lib/config";
 
 export interface MapHandle {
@@ -32,6 +41,12 @@ interface Props {
   /** Stop whose departure board is open — highlighted on the map. */
   selectedStopId: string | null;
   routeShape: [number, number][] | null;
+  /**
+   * Every scheduled call on the active vehicle's trip, in order. Drawn as numbered dots along
+   * the route, the ones still to be visited highlighted — which of them those are is derived
+   * here from the live frame, so the highlight moves with the vehicle rather than with a poll.
+   */
+  tripStops: TripStop[];
   onSelectStop: (stopId: string) => void;
   onSelectVehicle: (id: string, v: Vehicle | undefined) => void;
   onSelectedLive: (v: Vehicle) => void;
@@ -52,6 +67,10 @@ const LOGO_ZOOM = 11;
 const STOPS_ZOOM = 14;
 const STOP_LABEL_ZOOM = 15.5;
 const STOPS_LIMIT = 800;
+// The selected trip's stops carry their number in the trip from this zoom up. Below it the
+// numbers of consecutive city stops would overlap into an unreadable smear, so only the dots
+// (which are the highlight) are drawn.
+const TRIP_NUM_ZOOM = 12.5;
 // Fetch a box 35% larger than the view on each side, so small pans need no new request.
 const STOPS_PAD = 0.35;
 
@@ -123,6 +142,11 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
   themeRef.current = props.theme;
   const routeShapeRef = useRef(props.routeShape);
   routeShapeRef.current = props.routeShape;
+  const tripStopsRef = useRef(props.tripStops);
+  tripStopsRef.current = props.tripStops;
+  // Index of the first stop the active vehicle still has to visit, as last drawn — the live
+  // tick re-derives it and only rebuilds the layer's data when it has actually moved on.
+  const upcomingFromRef = useRef(-1);
   const onDetachRef = useRef(props.onDetach);
   onDetachRef.current = props.onDetach;
   const onSelectRef = useRef(props.onSelectVehicle);
@@ -176,6 +200,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
         layout: { "line-cap": "round", "line-join": "round" },
       });
     }
+    ensureTripStopLayers(map);
     if (!map.getLayer("veh-selected")) {
       map.addLayer({
         id: "veh-selected",
@@ -273,7 +298,72 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
 
     pushData(map);
     pushRoute(map);
+    pushTripStops(map);
     applyIsolation(map);
+  }
+
+  // --- Trip stops of the selected vehicle ---
+  // Added between the route line and the vehicle markers: the numbered dots sit on their route
+  // and under the vehicle, which is the reading order (where it has been, where it goes next,
+  // where it is). Empty whenever nothing is selected or the plan hasn't loaded.
+  function ensureTripStopLayers(map: maplibregl.Map) {
+    const pal = tripStopPalette(themeRef.current.dark);
+    if (!map.getSource("trip-stops")) {
+      map.addSource("trip-stops", { type: "geojson", data: emptyFC() });
+    }
+    if (!map.getLayer("trip-stops-dot")) {
+      map.addLayer({
+        id: "trip-stops-dot",
+        type: "circle",
+        source: "trip-stops",
+        paint: {
+          // Big enough from TRIP_NUM_ZOOM up to hold two digits; a plain dot below it.
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, TRIP_NUM_ZOOM, 9, 16, 11],
+          "circle-color": ["case", ["get", "upcoming"], pal.accent, pal.bg],
+          "circle-stroke-color": ["case", ["get", "upcoming"], pal.bg, pal.muted],
+          "circle-stroke-width": 1.5,
+          "circle-opacity": ["case", ["get", "upcoming"], 1, 0.85],
+        },
+      });
+    }
+    if (!map.getLayer("trip-stops-num")) {
+      map.addLayer({
+        id: "trip-stops-num",
+        type: "symbol",
+        source: "trip-stops",
+        minzoom: TRIP_NUM_ZOOM,
+        layout: {
+          "text-field": ["get", "n"],
+          "text-font": LABEL_FONT,
+          "text-size": ["interpolate", ["linear"], ["zoom"], TRIP_NUM_ZOOM, 9, 16, 11],
+          // The number belongs to its dot: dropping it on collision would leave blank dots
+          // among numbered ones, reading as two kinds of stop rather than one crowded label.
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": ["case", ["get", "upcoming"], pal.onAccent, pal.muted],
+        },
+      });
+    }
+  }
+
+  /** Which call the active vehicle is heading for, from its live frame (see lib/trip). */
+  function currentUpcomingFrom(): number {
+    const id = activeIdRef.current;
+    const v = id ? vehiclesRef.current.get(id) : undefined;
+    return upcomingFromIndex(
+      tripStopsRef.current,
+      { lat: v?.lat, lon: v?.lon, atStop: v?.atStop ?? false, delay: v?.delay ?? 0 },
+      Date.now(),
+    );
+  }
+
+  function pushTripStops(map: maplibregl.Map) {
+    const src = map.getSource("trip-stops") as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    upcomingFromRef.current = currentUpcomingFrom();
+    src.setData(tripStopFeatures(tripStopsRef.current, upcomingFromRef.current));
   }
 
   // --- Stop layer ---
@@ -463,7 +553,12 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     rafRef.current = requestAnimationFrame(() => {
       dirtyRef.current = false;
       const map = mapRef.current;
-      if (map) pushData(map);
+      if (map) {
+        pushData(map);
+        // Redraw the trip's stops only once the vehicle has actually passed one: the check is
+        // a single pass over the calls, the rebuild is a whole FeatureCollection.
+        if (currentUpcomingFrom() !== upcomingFromRef.current) pushTripStops(map);
+      }
       props.onCount(featuresRef.current.size);
       // Push the selected vehicle's latest live data (delay, at-stop, position) to the
       // popup, and follow it if following. A fresh object forces the panel to re-render.
@@ -704,6 +799,14 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     if (map) pushRoute(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.routeShape]);
+
+  // The active vehicle's trip plan arrived, or the selection moved to another vehicle. Like
+  // pushRoute, not gated on isStyleLoaded() — pushTripStops no-ops until the source exists.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) pushTripStops(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tripStops, props.activeId]);
 
   // Re-attach: when following (re-)activates for a selection, recentre immediately.
   useEffect(() => {

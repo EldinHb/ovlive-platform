@@ -1,5 +1,5 @@
-// Turning a vehicle's static trip plan into what the panel shows: the calls still ahead, and
-// the time each is actually expected.
+// Turning a vehicle's static trip plan into what the panel and the maps show: the calls still
+// ahead, where they sit in the trip, and the time each is actually expected.
 //
 // Both used to come off the detail endpoint, which meant re-sending the trip's stops (and the
 // route shape beside them) on every poll to express a delay addition and a position
@@ -20,7 +20,7 @@ export interface VehicleProgress {
 }
 
 /**
- * The stops a vehicle still has to visit, from its whole trip plan.
+ * Index, in the whole trip plan, of the first stop the vehicle still has to visit.
  *
  * Anchored to the vehicle's *physical position*: the current/next stop is the one nearest the
  * vehicle. If the vehicle is at a stop we start there (it hasn't left yet); if it's moving we
@@ -31,19 +31,49 @@ export interface VehicleProgress {
  * With no usable position this falls back to the first stop not yet departed, and to the whole
  * trip if they all have — a live vehicle always reports a position, so this is a safety net
  * rather than a real path.
+ *
+ * It is the *index* rather than the slice because a stop is numbered by its place in the whole
+ * trip ("the 4th stop" stays the 4th once the first three are behind us), and because the maps
+ * draw the stops already visited too, in a muted style. Every surface that splits a trip into
+ * done/ahead goes through here, so the panel and the two maps can't disagree about where the
+ * vehicle is in its trip.
  */
-export function upcomingStops(stops: TripStop[], veh: VehicleProgress, nowMs: number): TripStop[] {
-  if (stops.length === 0) return stops;
+export function upcomingFromIndex(stops: TripStop[], veh: VehicleProgress, nowMs: number): number {
+  if (stops.length === 0) return 0;
   const departed = (s: TripStop) => etaSeconds(s.scheduled_departure + veh.delay, nowMs) <= 0;
   const near = nearestStopIndex(stops, veh.lat, veh.lon);
-  let start: number;
   if (near == null) {
     const i = stops.findIndex((s) => !departed(s));
-    start = i < 0 ? 0 : i;
-  } else {
-    start = veh.atStop || !departed(stops[near]) ? near : near + 1;
+    return i < 0 ? 0 : i;
   }
-  return stops.slice(start);
+  return veh.atStop || !departed(stops[near]) ? near : near + 1;
+}
+
+/**
+ * The trip's calls as map features, carrying the two things both maps' layers switch on: `n`,
+ * the stop's number in the trip, and `upcoming`, whether the vehicle has yet to call there.
+ *
+ * The whole trip is emitted, not just the tail: the stops already served are what make the
+ * numbering legible ("this is the 4th stop" reads as an answer only when 1–3 are visible behind
+ * the vehicle), so they are drawn muted rather than dropped.
+ */
+export function tripStopFeatures(stops: TripStop[], upcomingFrom: number): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: stops.map((s, i) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+      properties: {
+        stopId: s.stop_id,
+        // gtfs-nl names stops "<place>, <stop>"; the place is obvious from the basemap at the
+        // zoom where labels appear, and repeating it wraps most of them onto two lines.
+        name: s.name.replace(/^[^,]+,\s*/, ""),
+        // A string, because that is what a symbol layer's text-field needs.
+        n: String(i + 1),
+        upcoming: i >= upcomingFrom,
+      },
+    })),
+  };
 }
 
 /** Time a stop is actually expected, on the same seconds-since-local-midnight axis. */

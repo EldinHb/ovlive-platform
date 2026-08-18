@@ -150,6 +150,7 @@ function VehiclePage() {
               vehicle={mapVehicle}
               routeShape={trip?.route_shape ?? null}
               stops={tripStops}
+              upcomingFrom={view.upcomingFrom}
               following={following}
               onDetach={() => setFollowing(false)}
             />
