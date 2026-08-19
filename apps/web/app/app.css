@@ -257,6 +257,16 @@ button { font-family: inherit; cursor: pointer; }
 .meta-grid .v { font-size: 15px; font-weight: 500; }
 .at-stop { display: inline-flex; gap: 6px; align-items: center; color: var(--ontime); font-weight: 600; font-size: 13px; margin-bottom: 8px; }
 
+/* Live telemetry: the values that keep changing while the panel is open, below the fixed
+   identifiers of .meta-grid. Speed only appears for a feed that measures it (NS trains), so
+   this block is often just the freshness line. */
+.telemetry { display: flex; flex-direction: column; gap: 6px; margin: -8px 0 18px; }
+.telemetry .last-update { margin: 0; }
+.speed-stat { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
+/* Stands in for the freshness dot, so both rows' labels start on the same column. */
+.speed-stat::before { content: ""; width: 7px; flex: none; }
+.speed-value { font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
 /* Data freshness: how long ago the vehicle last reported a position. The dot carries the
    signal at a glance; the age text is tabular so it doesn't jitter as it ticks each second. */
 .last-update { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); margin: -8px 0 18px; }
@@ -297,9 +307,15 @@ button { font-family: inherit; cursor: pointer; }
 .stop-time .eta-ontime { color: var(--text); }
 .stop-time .eta-late { color: var(--late); }
 .stop-time .eta-early { color: var(--early); }
-.stop-clock { display: inline-flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--text-dim); }
-.stop-clock .planned { text-decoration: line-through; opacity: 0.75; }
-.stop-clock .expected { font-weight: 500; }
+/* Planned beside expected. Either can be an "arrive–depart" range where the scheduled dwell
+   spans a minute boundary, which is long enough to need wrapping room on a narrow sheet —
+   but never mid-time, hence nowrap on the parts. */
+.stop-clock {
+  display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  justify-content: flex-end; font-size: 11px; color: var(--text-dim);
+}
+.stop-clock .planned { text-decoration: line-through; opacity: 0.75; white-space: nowrap; }
+.stop-clock .expected { font-weight: 500; white-space: nowrap; }
 .stops li.current .stop-num {
   color: var(--ontime); background: color-mix(in srgb, var(--ontime) 20%, transparent);
   box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.18);

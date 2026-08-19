@@ -42,6 +42,13 @@ export interface Vehicle {
   lat: number;
   lon: number;
   bearing: number | null;
+  /**
+   * Ground speed in km/h, or null when the feed doesn't measure it.
+   *
+   * Only NS trains report speed — KV6 has no such field — and a standing train reports a
+   * real 0, so null means "not reported", never "not moving".
+   */
+  speedKmh: number | null;
   delay: number;
   /** Whether `delay` is measured. False = unknown, which is not the same as on time. */
   delayKnown: boolean;
@@ -66,6 +73,8 @@ export interface MoveDelta {
   lat: number;
   lon: number;
   bearing: number | null;
+  /** See `Vehicle.speedKmh`; null when the feed reports no speed for this vehicle. */
+  speedKmh: number | null;
   delay: number;
   /** Whether `delay` is measured. False = unknown, which is not the same as on time. */
   delayKnown: boolean;
@@ -150,6 +159,8 @@ export interface VehicleSummary {
   lat: number;
   lon: number;
   bearing: number | null;
+  /** Ground speed in km/h; null when the feed reports none (everything except NS trains). */
+  speed_kmh: number | null;
   delay_seconds: number;
   /** Whether `delay_seconds` is measured. False = unknown, not on time. */
   delay_known: boolean;

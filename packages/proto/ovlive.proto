@@ -98,6 +98,11 @@ message VehicleState {
   // coordinates at all, so their dot marks the last confirmed station call and hops
   // station-to-station; it is never interpolated between them.
   bool schedule_positioned = 22;
+  float speed_kmh = 23;          // ground speed; only meaningful if speed_known
+  // Whether speed_kmh is measured. Only the NS train feed reports speed (KV6 has no such
+  // element), and a standing train reports a real 0 — so, exactly as with delay_known,
+  // "not reported" and "not moving" are indistinguishable without this flag.
+  bool speed_known = 24;
 }
 
 // Lightweight position delta for a vehicle already in view.
@@ -111,6 +116,8 @@ message VehicleMove {
   bool at_stop = 6;
   string current_stop_id = 7;
   bool schedule_positioned = 9;  // see VehicleState; can flip mid-trip if GPS (re)appears
+  float speed_kmh = 10;
+  bool speed_known = 11;         // see VehicleState
 }
 
 // One batched tick of changes for a subscription. Any repeated field may be empty.

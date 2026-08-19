@@ -12,7 +12,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
 use futures::{SinkExt, StreamExt};
-use ovlive_core::{BBox, Filters};
+use ovlive_core::{BBox, Filters, LiveTrip};
 use ovlive_proto::v1 as pb;
 use prost::Message as _;
 use tracing::debug;
@@ -36,6 +36,7 @@ struct Sent {
     lon: f64,
     delay: i32,
     at_stop: bool,
+    speed_kmh: Option<f32>,
 }
 
 struct Subscription {
@@ -48,11 +49,28 @@ struct Subscription {
     force_snapshot: bool,
 }
 
-fn changed(prev: &Sent, lat: f64, lon: f64, delay: i32, at_stop: bool) -> bool {
-    (lat - prev.lat).abs() > 1e-6
-        || (lon - prev.lon).abs() > 1e-6
-        || delay != prev.delay
-        || at_stop != prev.at_stop
+fn changed(prev: &Sent, now: &Sent) -> bool {
+    (now.lat - prev.lat).abs() > 1e-6
+        || (now.lon - prev.lon).abs() > 1e-6
+        || now.delay != prev.delay
+        || now.at_stop != prev.at_stop
+        // Speed is compared at whole km/h — the precision clients display. A standing train's
+        // GPS reports 0.03 one cycle and 0.05 the next, and a frame per subscription per tick
+        // to express that would be pure cost. Rounding also catches what position cannot: the
+        // NS feed republishes an unchanged fix, so a train braking to a halt can report a new
+        // speed against identical coordinates.
+        || now.speed_kmh.map(f32::round) != prev.speed_kmh.map(f32::round)
+}
+
+/// The values whose change makes a vehicle worth re-sending.
+fn sent_of(t: &LiveTrip) -> Sent {
+    Sent {
+        lat: t.lat,
+        lon: t.lon,
+        delay: t.delay_seconds,
+        at_stop: t.at_stop,
+        speed_kmh: t.speed_kmh,
+    }
 }
 
 /// How long a connection may go without a frame before we send a WebSocket Ping.
@@ -150,13 +168,13 @@ fn build_update(sub: &mut Subscription, state: &AppState) -> Option<Vec<u8>> {
 
     for t in hits {
         present.insert(t.id.clone());
-        let now = Sent { lat: t.lat, lon: t.lon, delay: t.delay_seconds, at_stop: t.at_stop };
+        let now = sent_of(t);
         match sub.sent.get(&t.id) {
             None => {
                 entered.push(to_state(t));
                 sub.sent.insert(t.id.clone(), now);
             }
-            Some(prev) if changed(prev, t.lat, t.lon, t.delay_seconds, t.at_stop) => {
+            Some(prev) if changed(prev, &now) => {
                 moved.push(to_move(t));
                 sub.sent.insert(t.id.clone(), now);
             }
@@ -174,13 +192,13 @@ fn build_update(sub: &mut Subscription, state: &AppState) -> Option<Vec<u8>> {
         }
         if let Some(t) = idx.get(id) {
             present.insert(t.id.clone());
-            let now = Sent { lat: t.lat, lon: t.lon, delay: t.delay_seconds, at_stop: t.at_stop };
+            let now = sent_of(t);
             match sub.sent.get(&t.id) {
                 None => {
                     entered.push(to_state(t));
                     sub.sent.insert(t.id.clone(), now);
                 }
-                Some(prev) if changed(prev, t.lat, t.lon, t.delay_seconds, t.at_stop) => {
+                Some(prev) if changed(prev, &now) => {
                     moved.push(to_move(t));
                     sub.sent.insert(t.id.clone(), now);
                 }

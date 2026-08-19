@@ -207,6 +207,10 @@ fn event_for(number: String, p: &Part) -> PosEvent {
         // so leave it unset and let the previous bearing stand — same intent as the
         // anti-jitter rule on the KV6 path.
         bearing: p.course.filter(|_| p.speed.unwrap_or(0.0) > 0.0),
+        // `Snelheid` is km/h (measured over 375 parts: median 74.7, p95 138.1, max 202.3 —
+        // the last consistent with 200 km/h running on the HSL). Unlike the course it is kept
+        // while stopped: 0 is the measurement, not a gap.
+        speed_kmh: p.speed.map(|s| s as f32),
         vehicle_type: Some(VehicleType::Train),
         // NS treinposities carries no punctuality at all (measured: the field doesn't exist).
         punctuality: None,
@@ -293,6 +297,7 @@ mod tests {
         assert_eq!(t.lat, Some(52.116924));
         assert_eq!(t.lon, Some(4.664842));
         assert_eq!(t.bearing, Some(151.51));
+        assert_eq!(t.speed_kmh, Some(79.0), "the leading part's own speed, in km/h");
         // WGS84 comes straight through; nothing pretends to be Rijksdriehoek.
         assert_eq!((t.rd_x, t.rd_y), (None, None));
         // The feed has no punctuality, so a train must not claim to be on time by omission.
@@ -310,6 +315,9 @@ mod tests {
         // Snelheid 0 → the reported Richting is stale, so no bearing is asserted.
         assert_eq!(stopped.bearing, None);
         assert_eq!(stopped.lat, Some(52.09));
+        // The speed itself is kept: 0 is what the train measured, not a missing reading, and
+        // that distinction is what tells a standing train from a bus that reports no speed.
+        assert_eq!(stopped.speed_kmh, Some(0.0));
     }
 
     #[test]

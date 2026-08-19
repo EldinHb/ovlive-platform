@@ -646,6 +646,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
                 delay: m.delay,
                 delayKnown: m.delayKnown,
                 atStop: m.atStop,
+                speedKmh: m.speedKmh,
               });
           }
           for (const id of u.left) {

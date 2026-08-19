@@ -34,6 +34,13 @@ backend on another host/port just needs `VITE_API_BASE=http://host:port pnpm --f
 `crates/*/examples/` targets — keep them that way, since a stale example breaks the whole
 workspace test build, not just itself.
 
+**`just fmt` (`cargo fmt --all`) is not part of that green, and running it buries a change.**
+The committed tree has ~136 rustfmt diffs across 23 files — much of the codebase is
+hand-formatted tighter than default rustfmt (compact struct literals in tests, long single-line
+`let`s), and reformatting turns a 70-line feature into an 860-line diff of files it never
+touched. Match the formatting of the code around your edit instead; if you do run it, revert
+every file you didn't mean to change (`git checkout HEAD -- <file>`).
+
 ### Running the backend locally
 
 The binary does not read `.env` itself (no dotenvy) — pass env vars explicitly, and note
@@ -126,6 +133,12 @@ LiveState --(tick)--> Arc<VehicleIndex> (R-tree) --watch--> WS diff engine + RES
 
 ### Design invariants worth knowing
 
+- **The WS diff engine re-sends a vehicle on position, delay, at-stop or speed change**, and
+  speed is compared at **whole km/h** — the precision clients display. A standing train's GPS
+  reports 0.03 one cycle and 0.05 the next, and a frame per subscription per tick to express
+  that is pure cost. Rounding also catches what position can't: the NS feed republishes an
+  unchanged fix, so a train braking to a halt can report a new speed against identical
+  coordinates.
 - **CPU is the overriding constraint** (explicit product requirement). Nothing per-message is
   fanned out to clients. The server tick (`WS_TICK_HZ`, default 3) rebuilds one immutable
   `Arc<VehicleIndex>` and publishes it on a `watch` channel; each WS connection then does its own
@@ -190,6 +203,17 @@ envelopes we take two — over **one** SUB connection, because fair use counts d
   `realtime_trip_id`, so `LiveTrip::realtime_trip_id()` reproduces gtfs-nl's own
   `IFF:SPR:8743` and stop departure boards resolve trains through `by_rt_id` with no
   special-casing. The web app's operator table maps `IFF` → the NS brand.
+- **`Snelheid` is km/h, and trains are the only vehicles with a speed at all.** Measured over
+  the 375-part sample: median 74.7, p95 138.1, max 202.3 — the last consistent with 200 km/h
+  running on the HSL, which m/s would not be. KV6 has no speed element whatsoever, so
+  `LiveTrip::speed_kmh` is `Option` rather than a `0.0` default: a standing train reports a
+  real zero (68 of those 375 were exactly `0.0`; a stationary unit reported `0.03`), and
+  collapsing that with "this feed doesn't measure speed" is the same mistake `delay_known`
+  exists to prevent. On the wire it's `speed_kmh` + `speed_known` (proto 23/24 and 10/11),
+  `speed_kmh: null` on REST. Unlike the course, which is dropped while stopped because a
+  parked unit's `Richting` drifts, the speed is kept — 0 *is* the measurement. Nothing derives
+  speed from consecutive fixes for the other feeds: two KV6 positions 30 s apart give a
+  straight line through the street grid, not a ground speed.
 - **One dot per train, from the lowest `Materieelvolgnummer`.** Coupled units each report their
   own GPS (measured: 216 trains with 1 part, 75 with 2, 3 with 3). Picking by *freshest* fix
   instead would flip between units every cycle and slide the dot along the train's length.
@@ -390,6 +414,19 @@ Consequences, so this isn't rediscovered the hard way:
   `scheduled_departure + delay` has passed. Deriving it client-side also makes the list drop stops
   as the local clock ticks rather than at the next poll. Prefer this split when adding to the
   vehicle view: ask whether the field can change mid-trip, and put it in the static half if not.
+- **A stop's arrival and departure are shown as one time unless the dwell actually reads as
+  two.** Measured over gtfs-nl's 18.3M `stop_times` rows: arrival == departure for **90.8%** of
+  all calls (bus 94.2%, metro 69.2%, train 68.4%, tram 65.0%, ferry 100%), and for **100.0%** of
+  every trip's first and last call (270 and 131 exceptions across 908k trips) — so the terminus
+  needs no special case, the feed already collapses it. Rendered at minute granularity only
+  **5.0%** of calls land on two different clock times: tram and metro dwells are 18–37 s against
+  schedule times that carry seconds 80–84% of the time, while trains are the outlier at 31.6%,
+  their times being always on whole minutes. `clockRange` in `VehicleInfo.tsx` therefore prints
+  `10:04` or `10:04–10:06` from the *rendered* pair rather than the raw seconds — one trip delay
+  shifts both ends, so a dwell can cross a minute boundary before the delay is applied and not
+  after. The countdown stays anchored on arrival: it answers when the vehicle gets here, and a
+  scheduled dwell must not push it forward. Both times take the same trip-level delay because
+  there is no per-stop realtime to tell them apart (see the `UserStopCode` measurement).
 - **A vehicle has two views, and they share their content by construction.** The map's panel
   (`VehiclePanel`) and the standalone page (`routes/vehicle.tsx`, `/vehicle/<id>`, opened in a
   new tab from the panel's link chip) both render `VehicleInfo.tsx` — one `vehicleView()` that

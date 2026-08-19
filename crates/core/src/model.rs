@@ -79,6 +79,11 @@ pub struct PosEvent {
     /// Course over ground in degrees (0 = north), when the feed supplies one. KV6 doesn't,
     /// so that path keeps deriving bearing from consecutive fixes.
     pub bearing: Option<f32>,
+    /// Ground speed in km/h, when the feed measures it. Only NS InfoPlus does (`Snelheid`);
+    /// KV6 has no speed element at all, so buses, trams and metros are permanently `None`.
+    /// Nothing derives it from consecutive fixes — a speed inferred from two KV6 positions
+    /// 30 s apart is a straight line through the street grid, not a measurement.
+    pub speed_kmh: Option<f32>,
     /// Mode, when the feed itself identifies it (the NS feed is trains by definition).
     /// Lets a vehicle render correctly even when GTFS enrichment finds no matching trip.
     pub vehicle_type: Option<VehicleType>,
@@ -112,6 +117,15 @@ pub struct LiveTrip {
     pub lat: f64,
     pub lon: f64,
     pub bearing: f32,
+    /// Ground speed in km/h as last measured by the feed, or `None` when the feed reports none.
+    ///
+    /// Only NS trains do (measured over 375 material parts: median 74.7, p95 138.1, max
+    /// 202.3 km/h — the last consistent with 200 km/h running on the HSL, which m/s would not
+    /// be). `Option` rather than a `0.0` default because a standing train reports a real zero
+    /// (68 of those 375 were exactly `0.0`, and a stationary unit reported `0.03`), which must
+    /// stay distinguishable from a bus whose feed never measures speed — the same trap
+    /// `delay_known` exists for.
+    pub speed_kmh: Option<f32>,
     /// Whether `lat`/`lon` is a schedule-anchored station position rather than a GPS fix.
     ///
     /// RET metros publish no usable coordinates at all (measured live: 0 of 155 records had
@@ -166,6 +180,7 @@ impl LiveTrip {
             lat: f64::NAN,
             lon: f64::NAN,
             bearing: f32::NAN,
+            speed_kmh: None,
             schedule_positioned: false,
             delay_seconds: 0,
             delay_known: false,

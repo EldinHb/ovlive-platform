@@ -60,6 +60,10 @@ pub struct VehicleJson {
     pub lat: f64,
     pub lon: f64,
     pub bearing: Option<f32>,
+    /// Ground speed in km/h, or `null` when the feed doesn't measure it. Only NS trains do —
+    /// KV6 has no speed element — and a standing train reports a real `0.0`, so `null` means
+    /// "not reported", never "not moving".
+    pub speed_kmh: Option<f32>,
     pub delay_seconds: i32,
     /// Whether `delay_seconds` is a measurement. `false` means unknown, not on time — see the
     /// train notes in the OpenAPI description.
@@ -91,6 +95,7 @@ impl From<&LiveTrip> for VehicleJson {
             lat: t.lat,
             lon: t.lon,
             bearing: t.bearing.is_finite().then_some(t.bearing),
+            speed_kmh: t.speed_kmh,
             delay_seconds: t.delay_seconds,
             delay_known: t.delay_known,
             destination: t.destination.clone(),
