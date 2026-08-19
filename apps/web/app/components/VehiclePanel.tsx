@@ -10,7 +10,13 @@ import {
   ShareButton,
   vehiclePagePath,
 } from "./Chips";
-import { LastUpdate, UpcomingStops, VehicleIdentity, VehicleMeta, vehicleView } from "./VehicleInfo";
+import {
+  UpcomingStops,
+  VehicleIdentity,
+  VehicleMeta,
+  VehicleTelemetry,
+  vehicleView,
+} from "./VehicleInfo";
 import { Sheet } from "./Sheet";
 
 /** Shareable deep link to a vehicle on the map: current page + `?v=<id>`. */
@@ -231,7 +237,7 @@ export function VehiclePanel({
 
           <VehicleMeta view={view} t={t} />
 
-          {view.lastUpdate && <LastUpdate iso={view.lastUpdate} now={now} t={t} />}
+          <VehicleTelemetry view={view} now={now} t={t} />
 
           <UpcomingStops view={view} loading={!trip} now={now} t={t} />
         </div>

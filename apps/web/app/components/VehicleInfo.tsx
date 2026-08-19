@@ -44,6 +44,14 @@ export interface VehicleView {
   delayText: string;
   /** Trip delay in seconds; only meaningful when `delayKind` isn't "unknown". */
   delay: number;
+  /**
+   * Ground speed in km/h, or null when this vehicle's feed doesn't measure it.
+   *
+   * Only NS trains do (KV6 carries no speed element), so this is null for every bus, tram,
+   * metro and ferry — and a standing train reports a real 0, which is why "no speed" is null
+   * rather than 0.
+   */
+  speedKmh: number | null;
   operatorName: string;
   vehicleNumber: string;
   blockCode: string;
@@ -119,6 +127,7 @@ export function vehicleView({ id, basic, detail, trip, ended = false, now, t }: 
     delayText:
       d.kind === "ontime" ? t("delay.onTime") : d.kind === "unknown" ? t("delay.unknown") : d.text,
     delay,
+    speedKmh: basic?.speedKmh ?? v?.speed_kmh ?? null,
     operatorName: v?.operator_name ?? basic?.operator ?? "",
     vehicleNumber: v?.vehicle_number ?? basic?.vehicleNumber ?? "",
     blockCode: v?.block_code ?? basic?.block ?? "",
@@ -213,7 +222,44 @@ export function LastUpdate({ iso, now, t }: { iso: string; now: number; t: TFn }
   );
 }
 
-/** The calls still ahead, each with its countdown and its delay-adjusted clock time. */
+/**
+ * The live measurements that sit between the identifiers and the stop list: how fast the
+ * vehicle is going, and how old its last fix is.
+ *
+ * Speed is here rather than in `VehicleMeta` because it moves — and it appears at all only
+ * for vehicles whose feed measures it. That is NS trains only: KV6 has no speed element, so
+ * a bus or metro shows nothing here rather than a fabricated 0.
+ */
+export function VehicleTelemetry({ view, now, t }: { view: VehicleView; now: number; t: TFn }) {
+  const speed = view.speedKmh;
+  if (speed == null && !view.lastUpdate) return null;
+  return (
+    <div className="telemetry">
+      {speed != null && (
+        <div className="speed-stat">
+          <span className="speed-label">{t("speed.label")}</span>
+          {/* Whole km/h. The GPS resolves hundredths — a standing train reports 0.03 — which
+              is noise at this granularity, and the stream only bothers to re-send a speed
+              once it has moved by a whole unit. */}
+          <span className="speed-value">{t("speed.value", { n: Math.round(speed) })}</span>
+        </div>
+      )}
+      {view.lastUpdate && <LastUpdate iso={view.lastUpdate} now={now} t={t} />}
+    </div>
+  );
+}
+
+/**
+ * Arrival and departure as one clock label: `"10:04"` when they land on the same minute,
+ * `"10:04–10:06"` when the scheduled dwell is long enough to show at that resolution.
+ */
+function clockRange(arrive: number, depart: number): string {
+  const a = secsToClock(arrive);
+  const d = secsToClock(depart);
+  return a === d ? a : `${a}–${d}`;
+}
+
+/** The calls still ahead, each with its countdown and its delay-adjusted clock times. */
 export function UpcomingStops({
   view,
   loading,
@@ -241,13 +287,21 @@ export function UpcomingStops({
           const number = view.upcomingFrom + i + 1;
           // Expected is the schedule shifted by the vehicle's live delay — the endpoint
           // sends schedule only, precisely so it doesn't have to be re-sent as the delay
-          // moves.
+          // moves. One trip-level delay shifts arrival and departure alike: these feeds carry
+          // no per-stop realtime to tell them apart (see the UserStopCode note in CLAUDE.md).
           const arrival = expectedTime(s.scheduled_arrival, view.delay);
-          const planned = secsToClock(s.scheduled_arrival);
-          const expected = secsToClock(arrival);
-          const differ = planned !== expected; // only distinct once they differ by a minute
-          // Countdown against the delay-adjusted arrival — that's the time the vehicle is
-          // actually expected, so the number tracks the live delay as it changes.
+          const departure = expectedTime(s.scheduled_departure, view.delay);
+          // Arrival and departure are the same instant for ~91% of the feed's calls (measured
+          // on gtfs-nl: 94% of bus calls, 68% of train calls, and 100.0% of every trip's first
+          // and last call), and where they differ the dwell is often shorter than the minute
+          // this renders at — 5% of all calls actually land on two different clock times. So
+          // the pair is shown as a range only where it reads as one, rather than printing the
+          // same number twice at nearly every stop.
+          const planned = clockRange(s.scheduled_arrival, s.scheduled_departure);
+          const expected = clockRange(arrival, departure);
+          const differ = planned !== expected; // only distinct once the delay moves it a minute
+          // Countdown against the delay-adjusted *arrival*: the question it answers is when
+          // the vehicle gets here, so a scheduled dwell must not push it forward.
           const eta = etaSeconds(arrival, now);
           return (
             <li key={s.stop_id + s.stop_sequence} className={current ? "current" : ""}>
@@ -261,7 +315,14 @@ export function UpcomingStops({
               <span className="stop-time">
                 <span
                   className={`eta eta-${differ ? view.delayKind : "ontime"}`}
-                  title={t("eta.title", { time: expected })}
+                  title={
+                    departure > arrival
+                      ? t("eta.titleDwell", {
+                          arrive: secsToClock(arrival),
+                          depart: secsToClock(departure),
+                        })
+                      : t("eta.title", { time: secsToClock(arrival) })
+                  }
                 >
                   {current ? t("eta.now") : etaLabel(eta, t)}
                 </span>

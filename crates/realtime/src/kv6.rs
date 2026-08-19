@@ -104,6 +104,9 @@ impl Builder {
             lat: None,
             lon: None,
             bearing: None,
+            // KV6 has no speed element at all — not omitted-when-stopped, absent from the
+            // schema — so no non-train vehicle ever reports one.
+            speed_kmh: None,
             // Mode comes from the matched GTFS route, not the feed.
             vehicle_type: None,
             punctuality: self.punctuality,

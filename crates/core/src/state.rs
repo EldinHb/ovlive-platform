@@ -299,6 +299,11 @@ fn apply_fields(trip: &mut LiveTrip, ev: &PosEvent) {
     if let Some(b) = ev.bearing {
         trip.bearing = b;
     }
+    // Speed is only ever what the feed measured (NS `Snelheid`); a fix-less message leaves the
+    // last measurement standing, exactly as the position does.
+    if let Some(kmh) = ev.speed_kmh {
+        trip.speed_kmh = Some(kmh);
+    }
     if let Some(t) = ev.vehicle_type {
         if trip.vehicle_type == crate::model::VehicleType::Unknown {
             trip.vehicle_type = t;
@@ -402,6 +407,7 @@ mod tests {
             lat: None,
             lon: None,
             bearing: None,
+            speed_kmh: None,
             vehicle_type: None,
             punctuality: Some(60),
             user_stop_code: Some("HAL1".into()),
@@ -506,6 +512,7 @@ mod tests {
             lat: Some(52.1),
             lon: Some(4.6),
             bearing: Some(90.0),
+            speed_kmh: Some(112.0),
             vehicle_type: Some(VehicleType::Train),
             punctuality: None,
             user_stop_code: None,
@@ -523,6 +530,8 @@ mod tests {
         // WGS84 straight through, feed-supplied course kept.
         assert_eq!((t.lat, t.lon), (52.1, 4.6));
         assert_eq!(t.bearing, 90.0);
+        // Speed too — the one measurement KV6 vehicles never have.
+        assert_eq!(t.speed_kmh, Some(112.0));
 
         // No curve for this train: 0 would be a claim of punctuality we can't make.
         s.apply(train("9999"), &NoEnricher);

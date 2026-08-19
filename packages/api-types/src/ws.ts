@@ -22,6 +22,8 @@ function toVehicle(s: any): Vehicle {
     lat: s.lat,
     lon: s.lon,
     bearing: Number.isFinite(s.bearing) ? s.bearing : null,
+    // Guarded by speed_known, not by truthiness: a standing train sends a real 0.
+    speedKmh: s.speed_known ? s.speed_kmh || 0 : null,
     delay: s.delay_seconds || 0,
     delayKnown: !!s.delay_known,
     destination: s.destination || "",
@@ -41,6 +43,7 @@ function toMove(m: any): MoveDelta {
     lat: m.lat,
     lon: m.lon,
     bearing: Number.isFinite(m.bearing) ? m.bearing : null,
+    speedKmh: m.speed_known ? m.speed_kmh || 0 : null,
     delay: m.delay_seconds || 0,
     delayKnown: !!m.delay_known,
     atStop: !!m.at_stop,

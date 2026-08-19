@@ -47,6 +47,8 @@ pub fn to_state(t: &LiveTrip) -> pb::VehicleState {
         line_color: t.line_color.clone().unwrap_or_default(),
         line_text_color: t.line_text_color.clone().unwrap_or_default(),
         schedule_positioned: t.schedule_positioned,
+        speed_kmh: t.speed_kmh.unwrap_or_default(),
+        speed_known: t.speed_kmh.is_some(),
     }
 }
 
@@ -61,6 +63,8 @@ pub fn to_move(t: &LiveTrip) -> pb::VehicleMove {
         at_stop: t.at_stop,
         current_stop_id: t.current_stop_id.clone().unwrap_or_default(),
         schedule_positioned: t.schedule_positioned,
+        speed_kmh: t.speed_kmh.unwrap_or_default(),
+        speed_known: t.speed_kmh.is_some(),
     }
 }
 

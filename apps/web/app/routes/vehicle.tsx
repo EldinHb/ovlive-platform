@@ -12,10 +12,10 @@ import { RestClient, type TripStop, type VehicleDetail, type VehicleTripPlan } f
 import { IconBack, IconFollow, ShareButton, vehiclePagePath } from "../components/Chips";
 import { VehicleMap } from "../components/VehicleMap";
 import {
-  LastUpdate,
   UpcomingStops,
   VehicleIdentity,
   VehicleMeta,
+  VehicleTelemetry,
   vehicleView,
 } from "../components/VehicleInfo";
 import { useNow } from "../lib/clock";
@@ -189,7 +189,7 @@ function VehiclePage() {
 
             <VehicleMeta view={view} t={t} />
 
-            {view.lastUpdate && <LastUpdate iso={view.lastUpdate} now={now} t={t} />}
+            <VehicleTelemetry view={view} now={now} t={t} />
 
             <UpcomingStops view={view} loading={!trip} now={now} t={t} />
           </div>
