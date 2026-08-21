@@ -79,7 +79,23 @@ button { font-family: inherit; cursor: pointer; }
 
 /* Settings popover (map theme + future options) */
 .settings { position: relative; }
-.settings-pop { position: absolute; top: 52px; right: 0; width: 200px; padding: 8px; }
+/* The popover is a child of `.hud-right`, so it can only be lifted above `.filters` (same
+   z-index, later in the DOM) by lifting the whole cluster — and only while the menu is open,
+   so the buttons keep sitting under the vehicle sheet the rest of the time. */
+.hud-right:has(.settings-pop) { z-index: 7; }
+.settings-pop {
+  position: absolute; top: 52px; right: 0; width: 200px; padding: 8px;
+  /* `.icon-btn`'s backdrop-filter makes every button its own stacking context, so a
+     z-index:auto popover paints *under* the locate button, which comes later in the DOM. */
+  z-index: 10;
+  /* Every option lives in this one popover, so on a short viewport (a landscape phone, a
+     small window) it is taller than the space below the gear: scroll inside it rather than
+     off the screen. 100dvh so a mobile browser's retracting toolbar doesn't hide the tail. */
+  max-height: calc(100vh - 84px);
+  max-height: calc(100dvh - 84px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .settings-title {
   font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);
   padding: 6px 10px 8px;
@@ -405,6 +421,16 @@ button { font-family: inherit; cursor: pointer; }
   .seg::-webkit-scrollbar { display: none; }
   .seg button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
   .icon-btn { width: 48px; height: 48px; font-size: 22px; }
+
+  /* Follows the shorter button (12 + 48), and stops above the collapsed filter strip
+     (45px + its 12px inset + a 10px gap) instead of at the viewport edge: on a 667px-tall
+     phone the tail ran behind it. An *open* filter panel (44vh) still overlaps, which is what
+     the `:has()` lift above is for — overlapping and readable beats hidden. */
+  .settings-pop {
+    top: 48px;
+    max-height: calc(100vh - 127px);
+    max-height: calc(100dvh - 127px);
+  }
 
   /* Filter panel spans the bottom; collapsed to just its header by default. */
   .filters { left: 12px; right: 12px; bottom: 12px; width: auto; }
