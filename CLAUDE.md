@@ -455,6 +455,15 @@ Consequences, so this isn't rediscovered the hard way:
   on the tick and rebuilds the layer only once the vehicle has actually passed a stop (the
   FeatureCollection is the expensive half, the check is one pass over the calls). Numbers appear
   from zoom 12.5, where the dot is wide enough to hold two digits.
+  **The numbers themselves are one setting** (`settings.stopNums`, `ovlive_stop_numbers` in
+  `localStorage`, default on): they are the same number in the panel's list and on both maps, so
+  showing them in one place and not the other would read as a bug. Off, the dots and the
+  ahead/served highlight stay — that is *where the vehicle is*, not how the stops are labelled —
+  the map dot shrinks back to a plain marker (`tripStopRadius`, since a dot only needs to hold
+  two digits while it carries them) and the panel's node is the plain dot it was before. Both
+  maps apply it through their own `applyStopNumbers`, off the layers already built, so a toggle
+  costs a paint property rather than a rebuild. The vehicle page has no settings menu and reads
+  the preference once on mount, exactly as it does the theme.
 - **The stop layer is REST, not the live stream.** Stops change only when the daily GTFS feed
   swaps, so `MapView` fetches `GET /v1/stops/viewport` (supported; unrelated to the deprecated
   `/v1/stops`) for a box padded 35% around the view and re-asks only when the user pans outside

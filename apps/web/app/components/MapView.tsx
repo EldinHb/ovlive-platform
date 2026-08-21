@@ -14,6 +14,7 @@ import {
   LABEL_FONT,
   markerPalette,
   tripStopPalette,
+  tripStopRadius,
   withGlyphs,
   type MapTheme,
   type MarkerPalette,
@@ -47,6 +48,8 @@ interface Props {
    * here from the live frame, so the highlight moves with the vehicle rather than with a poll.
    */
   tripStops: TripStop[];
+  /** Number those dots (see `settings.stopNums`); off leaves the dots and their highlight. */
+  stopNumbers: boolean;
   onSelectStop: (stopId: string) => void;
   onSelectVehicle: (id: string, v: Vehicle | undefined) => void;
   onSelectedLive: (v: Vehicle) => void;
@@ -144,6 +147,8 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
   routeShapeRef.current = props.routeShape;
   const tripStopsRef = useRef(props.tripStops);
   tripStopsRef.current = props.tripStops;
+  const stopNumbersRef = useRef(props.stopNumbers);
+  stopNumbersRef.current = props.stopNumbers;
   // Index of the first stop the active vehicle still has to visit, as last drawn — the live
   // tick re-derives it and only rebuilds the layer's data when it has actually moved on.
   const upcomingFromRef = useRef(-1);
@@ -317,8 +322,9 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
         type: "circle",
         source: "trip-stops",
         paint: {
-          // Big enough from TRIP_NUM_ZOOM up to hold two digits; a plain dot below it.
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, TRIP_NUM_ZOOM, 9, 16, 11],
+          // Big enough from TRIP_NUM_ZOOM up to hold two digits; a plain dot below it. The
+          // preference may shrink it again — applyStopNumbers below owns that.
+          "circle-radius": tripStopRadius(true, TRIP_NUM_ZOOM) as any,
           "circle-color": ["case", ["get", "upcoming"], pal.accent, pal.bg],
           "circle-stroke-color": ["case", ["get", "upcoming"], pal.bg, pal.muted],
           "circle-stroke-width": 1.5,
@@ -345,6 +351,23 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
           "text-color": ["case", ["get", "upcoming"], pal.onAccent, pal.muted],
         },
       });
+    }
+    applyStopNumbers(map);
+  }
+
+  /**
+   * The numbers are a preference (some people read the dots as clutter with them on), so the
+   * layers are built numbered and then adjusted here — on creation and whenever the setting
+   * changes. The dots and the ahead/served highlight stay either way: they are position, not
+   * numbering.
+   */
+  function applyStopNumbers(map: maplibregl.Map) {
+    const on = stopNumbersRef.current;
+    if (map.getLayer("trip-stops-dot")) {
+      map.setPaintProperty("trip-stops-dot", "circle-radius", tripStopRadius(on, TRIP_NUM_ZOOM));
+    }
+    if (map.getLayer("trip-stops-num")) {
+      map.setLayoutProperty("trip-stops-num", "visibility", on ? "visible" : "none");
     }
   }
 
@@ -808,6 +831,14 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref)
     if (map) pushTripStops(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tripStops, props.activeId]);
+
+  // The stop-numbers setting was toggled. Only the number layer and the dot size change — the
+  // data behind them is the same, so nothing is re-pushed.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) applyStopNumbers(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.stopNumbers]);
 
   // Re-attach: when following (re-)activates for a selection, recentre immediately.
   useEffect(() => {

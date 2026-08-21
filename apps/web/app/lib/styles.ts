@@ -71,6 +71,18 @@ export function tripStopPalette(dark: boolean) {
   };
 }
 
+/**
+ * Radius of those dots, which is the one thing the "stop numbers" preference changes about the
+ * map: a dot only has to be wide enough to hold two digits while it carries them, so with the
+ * numbers off it shrinks back to a plain marker. `numZoom` is the zoom the numbers appear at,
+ * where the dot has to have reached its full size. Shared so both maps shrink alike.
+ */
+export function tripStopRadius(numbered: boolean, numZoom: number) {
+  return numbered
+    ? ["interpolate", ["linear"], ["zoom"], 9, 3.5, numZoom, 9, 16, 11]
+    : ["interpolate", ["linear"], ["zoom"], 9, 3, 16, 6];
+}
+
 /** Fill, text and border of a vehicle marker (dot at low zoom, pill at high zoom). */
 export interface MarkerPalette {
   bg: string;
