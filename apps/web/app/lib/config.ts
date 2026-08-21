@@ -64,6 +64,20 @@ export function setSavedShowStops(on: boolean) {
   } catch {}
 }
 
+// The stop numbers on a selected vehicle's trip (the dots' labels on both maps and the badges
+// in the panel's list). On by default; the key stores "0" only once the user has turned them
+// off. It is one preference rather than two because the number in the panel and the number on
+// the map are the same number — showing it in one place and not the other reads as a bug.
+const STOP_NUMS_KEY = "ovlive_stop_numbers";
+export function getSavedStopNumbers(): boolean {
+  return typeof localStorage === "undefined" || localStorage.getItem(STOP_NUMS_KEY) !== "0";
+}
+export function setSavedStopNumbers(on: boolean) {
+  try {
+    localStorage.setItem(STOP_NUMS_KEY, on ? "1" : "0");
+  } catch {}
+}
+
 /**
  * The filter chips (vehicle types + operators). Restored before the first WS connect, so the
  * stream opens already filtered rather than flashing every vehicle for a tick.

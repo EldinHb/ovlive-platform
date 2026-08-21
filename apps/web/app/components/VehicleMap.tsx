@@ -10,7 +10,14 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import type { TripStop } from "@ovlive/api-types";
 import { NL_CENTER } from "../lib/config";
-import { LABEL_FONT, markerPalette, tripStopPalette, withGlyphs, type MapTheme } from "../lib/styles";
+import {
+  LABEL_FONT,
+  markerPalette,
+  tripStopPalette,
+  tripStopRadius,
+  withGlyphs,
+  type MapTheme,
+} from "../lib/styles";
 import { tripStopFeatures } from "../lib/trip";
 
 /** Close enough to read the street the vehicle is on, wide enough to see the next stops. */
@@ -39,6 +46,8 @@ interface Props {
    * page's panel and its map always agree on where the vehicle is in its trip.
    */
   upcomingFrom: number;
+  /** Number those dots (see `settings.stopNums`); off leaves the dots and their highlight. */
+  stopNumbers: boolean;
   /** Keep the camera on the vehicle. Cleared by `onDetach` as soon as the user pans away. */
   following: boolean;
   onDetach: () => void;
@@ -50,6 +59,7 @@ export function VehicleMap({
   routeShape,
   stops,
   upcomingFrom,
+  stopNumbers,
   following,
   onDetach,
 }: Props) {
@@ -68,6 +78,8 @@ export function VehicleMap({
   stopsRef.current = stops;
   const upcomingFromRef = useRef(upcomingFrom);
   upcomingFromRef.current = upcomingFrom;
+  const stopNumbersRef = useRef(stopNumbers);
+  stopNumbersRef.current = stopNumbers;
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const followingRef = useRef(following);
@@ -98,8 +110,9 @@ export function VehicleMap({
         type: "circle",
         source: "trip-stops",
         paint: {
-          // Big enough from STOP_LABEL_ZOOM up to hold two digits; a plain dot below it.
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 3.5, STOP_LABEL_ZOOM, 9, 16, 11],
+          // Big enough from STOP_LABEL_ZOOM up to hold two digits; a plain dot below it. The
+          // preference may shrink it again — applyStopNumbers owns that.
+          "circle-radius": tripStopRadius(true, STOP_LABEL_ZOOM) as any,
           "circle-color": ["case", ["get", "upcoming"], pal.accent, pal.bg],
           "circle-stroke-color": ["case", ["get", "upcoming"], pal.bg, pal.muted],
           "circle-stroke-width": 1.5,
@@ -138,7 +151,8 @@ export function VehicleMap({
           "text-font": LABEL_FONT,
           "text-size": 11,
           "text-anchor": "left",
-          // Clear of the dot, which is now wide enough to hold the stop's number.
+          // Clear of the dot, which is wide enough to hold the stop's number — unless the
+          // numbers are off, which applyStopNumbers takes back in.
           "text-offset": [1.3, 0],
           "text-max-width": 12,
           "text-padding": 3,
@@ -151,8 +165,28 @@ export function VehicleMap({
         },
       });
     }
+    applyStopNumbers(map);
     pushRoute(map);
     pushStops(map);
+  }
+
+  /**
+   * The numbers are a preference, shared with the map's own trip-stop layer (see the identical
+   * function in MapView): with them off the number layer goes, the dot shrinks to a plain
+   * marker, and the stop's name moves back in beside it. The ahead/served highlight stays —
+   * that is where the vehicle is, not how the stops are labelled.
+   */
+  function applyStopNumbers(map: maplibregl.Map) {
+    const on = stopNumbersRef.current;
+    if (map.getLayer("trip-stops-dot")) {
+      map.setPaintProperty("trip-stops-dot", "circle-radius", tripStopRadius(on, STOP_LABEL_ZOOM));
+    }
+    if (map.getLayer("trip-stops-num")) {
+      map.setLayoutProperty("trip-stops-num", "visibility", on ? "visible" : "none");
+    }
+    if (map.getLayer("trip-stops-label")) {
+      map.setLayoutProperty("trip-stops-label", "text-offset", on ? [1.3, 0] : [0.7, 0]);
+    }
   }
 
   function pushRoute(map: maplibregl.Map) {
@@ -279,6 +313,11 @@ export function VehicleMap({
     if (map) pushStops(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stops, upcomingFrom]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map) applyStopNumbers(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopNumbers]);
 
   return <div ref={containerRef} className="maplibregl-map" />;
 }

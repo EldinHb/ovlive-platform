@@ -9,6 +9,8 @@ interface Props {
   onShowStopsChange: (on: boolean) => void;
   multiSelect: boolean;
   onMultiSelectChange: (on: boolean) => void;
+  stopNumbers: boolean;
+  onStopNumbersChange: (on: boolean) => void;
 }
 
 const LANGS: { id: Lang; label: string }[] = [
@@ -24,6 +26,8 @@ export function SettingsMenu({
   onShowStopsChange,
   multiSelect,
   onMultiSelectChange,
+  stopNumbers,
+  onStopNumbersChange,
 }: Props) {
   const { t, lang, setLang } = useI18n();
   const [open, setOpen] = useState(false);
@@ -105,6 +109,23 @@ export function SettingsMenu({
               <span className="setting-hint">{t("settings.multiHint")}</span>
             </span>
             <span className={`switch ${multiSelect ? "on" : ""}`} aria-hidden>
+              <span className="knob" />
+            </span>
+          </button>
+          {/* The numbers on a selected vehicle's stops, in the panel and on both maps at once
+              — they are the same number, so they are one setting. Turning them off keeps the
+              dots and the ahead/served highlight. */}
+          <button
+            className="setting-toggle"
+            role="menuitemcheckbox"
+            aria-checked={stopNumbers}
+            onClick={() => onStopNumbersChange(!stopNumbers)}
+          >
+            <span>
+              <span className="setting-label">{t("settings.stopNums")}</span>
+              <span className="setting-hint">{t("settings.stopNumsHint")}</span>
+            </span>
+            <span className={`switch ${stopNumbers ? "on" : ""}`} aria-hidden>
               <span className="knob" />
             </span>
           </button>

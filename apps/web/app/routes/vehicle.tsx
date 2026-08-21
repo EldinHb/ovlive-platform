@@ -19,7 +19,7 @@ import {
   vehicleView,
 } from "../components/VehicleInfo";
 import { useNow } from "../lib/clock";
-import { API_BASE, getSavedThemeId } from "../lib/config";
+import { API_BASE, getSavedStopNumbers, getSavedThemeId } from "../lib/config";
 import { I18nProvider, useI18n } from "../lib/i18n";
 import { useVehicleLive } from "../lib/live";
 import { DEFAULT_THEME, THEMES } from "../lib/styles";
@@ -50,6 +50,8 @@ function VehiclePage() {
   const rest = useMemo(() => new RestClient(API_BASE), []);
   // The theme the map was last set to; the page has no switcher of its own.
   const theme = useMemo(() => THEMES.find((x) => x.id === getSavedThemeId()) ?? DEFAULT_THEME, []);
+  // Same for the stop-numbers setting: the page has no settings menu, it follows the map's.
+  const stopNumbers = useMemo(getSavedStopNumbers, []);
 
   const [detail, setDetail] = useState<VehicleDetail | null>(null);
   const [trip, setTrip] = useState<VehicleTripPlan | null>(null);
@@ -151,6 +153,7 @@ function VehiclePage() {
               routeShape={trip?.route_shape ?? null}
               stops={tripStops}
               upcomingFrom={view.upcomingFrom}
+              stopNumbers={stopNumbers}
               following={following}
               onDetach={() => setFollowing(false)}
             />
@@ -191,7 +194,7 @@ function VehiclePage() {
 
             <VehicleTelemetry view={view} now={now} t={t} />
 
-            <UpcomingStops view={view} loading={!trip} now={now} t={t} />
+            <UpcomingStops view={view} loading={!trip} numbers={stopNumbers} now={now} t={t} />
           </div>
         </div>
       )}

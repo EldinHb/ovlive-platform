@@ -41,6 +41,8 @@ interface Props {
   trip: VehicleTripPlan | null;
   following: boolean;
   isolate: boolean;
+  /** Number the trip's stops in the list (`settings.stopNums`), as the map does its dots. */
+  stopNumbers: boolean;
   onToggleIsolate: () => void;
   onFollow: () => void;
   onSelectTab: (id: string) => void;
@@ -57,6 +59,7 @@ export function VehiclePanel({
   trip,
   following,
   isolate,
+  stopNumbers,
   onToggleIsolate,
   onFollow,
   onSelectTab,
@@ -239,7 +242,7 @@ export function VehiclePanel({
 
           <VehicleTelemetry view={view} now={now} t={t} />
 
-          <UpcomingStops view={view} loading={!trip} now={now} t={t} />
+          <UpcomingStops view={view} loading={!trip} numbers={stopNumbers} now={now} t={t} />
         </div>
       )}
     </Sheet>

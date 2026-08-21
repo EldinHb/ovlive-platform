@@ -22,10 +22,12 @@ import {
   getSavedFilters,
   getSavedMultiSelect,
   getSavedShowStops,
+  getSavedStopNumbers,
   getSavedThemeId,
   setSavedFilters,
   setSavedMultiSelect,
   setSavedShowStops,
+  setSavedStopNumbers,
   setSavedThemeId,
 } from "../lib/config";
 import { I18nProvider, useI18n } from "../lib/i18n";
@@ -79,6 +81,11 @@ function MapApp() {
   const setShowStops = (on: boolean) => {
     setShowStopsState(on);
     setSavedShowStops(on);
+  };
+  const [stopNumbers, setStopNumbersState] = useState<boolean>(() => getSavedStopNumbers());
+  const setStopNumbers = (on: boolean) => {
+    setStopNumbersState(on);
+    setSavedStopNumbers(on);
   };
 
   // Selection is an ordered list; `activeId` is the tab currently shown in the popup.
@@ -410,6 +417,7 @@ function MapApp() {
         selectedStopId={stopId}
         routeShape={trip?.route_shape ?? null}
         tripStops={trip?.stops ?? NO_STOPS}
+        stopNumbers={stopNumbers}
         onSelectStop={openStop}
         onSelectVehicle={selectVehicle}
         onSelectedLive={onSelectedLive}
@@ -436,6 +444,8 @@ function MapApp() {
           onShowStopsChange={setShowStops}
           multiSelect={multiSelect}
           onMultiSelectChange={changeMultiSelect}
+          stopNumbers={stopNumbers}
+          onStopNumbersChange={setStopNumbers}
         />
         <button className="icon-btn" title={t("locate")} onClick={() => mapRef.current?.locate()}>
           ◎
@@ -469,6 +479,7 @@ function MapApp() {
           trip={trip}
           following={following}
           isolate={isolate}
+          stopNumbers={stopNumbers}
           onToggleIsolate={() => setIsolate((v) => !v)}
           onFollow={() => setFollowing(true)}
           onSelectTab={selectTab}

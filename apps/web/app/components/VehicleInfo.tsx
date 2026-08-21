@@ -263,12 +263,19 @@ function clockRange(arrive: number, depart: number): string {
 export function UpcomingStops({
   view,
   loading,
+  numbers,
   now,
   t,
 }: {
   view: VehicleView;
   /** The trip plan hasn't arrived yet — distinct from a trip that matched no schedule. */
   loading: boolean;
+  /**
+   * Show each stop's number in the trip (`settings.stopNums`). Off, the timeline node is the
+   * plain dot it was before the numbers existed — the row keeps its node either way, since it
+   * is what the connecting line is drawn between.
+   */
+  numbers: boolean;
   now: number;
   t: TFn;
 }) {
@@ -277,7 +284,7 @@ export function UpcomingStops({
       <h3 className="section-title">{t("stops.next")}</h3>
       {loading && <div className="vpanel-sub">{t("stops.loading")}</div>}
       {!loading && view.stops.length === 0 && <div className="vpanel-sub">{t("stops.none")}</div>}
-      <ul className="stops">
+      <ul className={`stops ${numbers ? "" : "plain"}`}>
         {view.stops.map((s, i) => {
           const current = view.atStop && i === 0; // vehicle is at the first not-yet-departed stop
           // Counted from the trip's first call, not from this list — the stops behind the
@@ -305,9 +312,13 @@ export function UpcomingStops({
           const eta = etaSeconds(arrival, now);
           return (
             <li key={s.stop_id + s.stop_sequence} className={current ? "current" : ""}>
-              <span className="stop-num" title={t("stops.nth", { n: number })}>
-                {number}
-              </span>
+              {numbers ? (
+                <span className="stop-num" title={t("stops.nth", { n: number })}>
+                  {number}
+                </span>
+              ) : (
+                <span className="stop-dot" aria-hidden />
+              )}
               <span className="stop-name">
                 {current && <span className="stop-now">{t("atStop.badge")}</span>}
                 <span className="stop-label">{s.name}</span>
