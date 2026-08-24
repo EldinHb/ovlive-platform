@@ -11,6 +11,7 @@ import {
   type VehicleSummary,
   type VehicleTripPlan,
 } from "@ovlive/api-types";
+import { AboutButton } from "../components/About";
 import { MapView, type MapHandle } from "../components/MapView";
 import { SettingsMenu } from "../components/SettingsMenu";
 import { FiltersPanel, MIN_QUERY } from "../components/FiltersPanel";
@@ -430,6 +431,7 @@ function MapApp() {
 
       <div className="hud-top panel">
         <span className="brand">OVLive</span>
+        <AboutButton />
         <span className={`status-dot ${status}`} title={status} />
         <span className="count">
           {t("hud.inView", { n: count.toLocaleString(lang === "nl" ? "nl-NL" : "en-US") })}

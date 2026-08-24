@@ -62,6 +62,68 @@ button { font-family: inherit; cursor: pointer; }
 .status-dot.connecting { background: #ff9f0a; }
 .count { color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; }
 
+/* The ⓘ beside the brand, and the About dialog it opens (see components/About.tsx for why
+   that dialog is a native <dialog> rather than a div with a z-index). */
+.info-btn {
+  flex: none; width: 22px; height: 22px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: transparent; color: var(--text-dim);
+  transition: color .15s, background .15s;
+}
+.info-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+
+/* A modal <dialog> is centred by the UA, so it needs no inset or transform of its own.
+   `[open]` guards the display change: a bare `display: flex` here would outrank the UA's
+   `dialog:not([open]) { display: none }` and paint the dialog while it is closed. */
+.about {
+  /* This is the width at middling window sizes only. Below ~600px the UA's own
+     `max-width: calc(100% - 38px)` for a modal dialog is smaller and wins, which is why the
+     mobile block overrides the height but not the width. */
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(84vh, 760px);
+  max-height: min(84dvh, 760px);
+  padding: 0; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel-solid); color: var(--text); box-shadow: var(--shadow);
+}
+/* No `position` needed for `.icon-close` to anchor to the dialog: the top layer positions a
+   modal dialog absolutely whatever the author asks for (an inline `position: static` still
+   computes to `absolute`), so it is already the close button's containing block. */
+.about[open] { display: flex; flex-direction: column; }
+.about::backdrop {
+  background: rgba(0, 0, 0, .45);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.about-head { flex: none; padding: 22px 56px 14px 22px; }
+.about-head h2 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+.about-tagline { margin: 5px 0 0; color: var(--text-dim); font-size: 14px; }
+/* Only the prose scrolls, so the coffee button and the credit stay put on a short viewport. */
+.about-body {
+  flex: 1 1 auto; min-height: 0; padding: 0 22px 18px;
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.about-body h3 {
+  margin: 20px 0 6px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);
+}
+.about-body p { margin: 0; font-size: 14px; line-height: 1.55; }
+.about-foot {
+  flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  padding: 16px 22px 20px; border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.about-support { margin: 0; font-size: 14px; color: var(--text-dim); }
+/* Darker than --accent for the same reason `.follow-chip.active` is: white on brand blue
+   only reaches ~4.7:1. */
+.coffee-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 15px; border-radius: 999px;
+  background: #0058c4; color: #fff; font-size: 14px; font-weight: 600; text-decoration: none;
+  transition: filter .15s;
+}
+.coffee-btn:hover { filter: brightness(1.12); }
+.about-credit { margin: 0; font-size: 12px; color: var(--text-dim); }
+
 /* Controls cluster top-right */
 .hud-right { position: absolute; top: 16px; right: 16px; z-index: 5; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
 .seg { display: flex; padding: 4px; gap: 2px; }
@@ -415,6 +477,15 @@ button { font-family: inherit; cursor: pointer; }
   .hud-top { top: 12px; left: 12px; padding: 8px 12px; gap: 8px; }
   .brand { font-size: 15px; }
   .count { font-size: 12px; }
+
+  /* Only the height: a narrow viewport is already handled by the UA's own
+     `max-width: calc(100% - 38px)` (see `.about`), which is what actually sets the gutters
+     here. The prose gives back the horizontal padding it no longer has room for. */
+  .about { max-height: min(88dvh, 760px); }
+  .about-head { padding: 18px 52px 12px 18px; }
+  .about-head h2 { font-size: 20px; }
+  .about-body { padding: 0 18px 16px; }
+  .about-foot { padding: 14px 18px 18px; }
 
   .hud-right { top: 12px; right: 12px; gap: 8px; }
   .seg { max-width: 60vw; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
