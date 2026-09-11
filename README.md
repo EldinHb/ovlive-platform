@@ -33,8 +33,10 @@ output.
 |------|------|
 | `crates/` | Rust backend workspace (ingestion + API + WS, single binary) |
 | `packages/proto` | `ovlive.proto` — shared WebSocket contract |
+| `packages/api-types` | TS clients (`LiveClient` WS, `RestClient`) + the generated protobuf codec |
+| `packages/shared` | Pure TS shared by web and mobile: formatting, trip derivations, i18n strings, `vehicleView()` |
 | `apps/web` | React Router 7 SPA |
-| `apps/mobile` | Expo React Native app (not started) |
+| `apps/mobile` | Expo React Native app (iOS + Android, MapLibre Native) |
 | `migrations/` | Postgres migrations (sqlx) |
 
 See **[CLAUDE.md](./CLAUDE.md)** for architecture and the reasoning behind the non-obvious

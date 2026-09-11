@@ -2,8 +2,9 @@ syntax = "proto3";
 
 // OVLive realtime WebSocket contract.
 // Single source of truth for the binary stream between the server and all clients
-// (web + mobile). Generates Rust types via prost (crates/proto) and TS types via
-// ts-proto (packages/api-types). REST endpoints use JSON and are NOT described here.
+// (web + mobile). Rust types come from prost (crates/proto, at build time); the TS codec is
+// a committed protobufjs static module (packages/api-types/src/gen, `pnpm --filter
+// @ovlive/api-types run generate`). REST endpoints use JSON and are NOT described here.
 package ovlive.v1;
 
 // ---------------------------------------------------------------------------

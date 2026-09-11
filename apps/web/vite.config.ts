@@ -9,10 +9,11 @@ export default defineConfig({
   resolve: {
     alias: {
       "@ovlive/api-types": path.resolve(repoRoot, "packages/api-types/src/index.ts"),
+      "@ovlive/shared": path.resolve(repoRoot, "packages/shared/src/index.ts"),
     },
   },
   server: {
-    // allow importing the shared package + ovlive.proto from outside apps/web
+    // allow importing the workspace packages from outside apps/web
     fs: { allow: [repoRoot] },
   },
 });

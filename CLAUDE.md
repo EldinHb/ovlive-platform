@@ -20,15 +20,29 @@ cargo test --workspace --lib                    # 45 unit tests, no DB or networ
 cargo test -p ovlive-core blocks::              # one module
 cargo test -p ovlive-core predicts_next_line_in_block -- --exact
 
-pnpm install                                    # workspace: apps/*, packages/api-types
+pnpm install                                    # workspace: apps/*, packages/api-types, packages/shared
 pnpm --filter @ovlive/web run dev               # SPA on :5173 (needs the backend up)
 pnpm --filter @ovlive/web run typecheck         # react-router typegen && tsc
 pnpm --filter @ovlive/web run build
+pnpm -r run typecheck                           # every TS package (what .github/workflows/js.yml runs)
+pnpm --filter @ovlive/api-types run generate    # regenerate the protobuf codec after editing ovlive.proto
+
+pnpm --filter @ovlive/mobile run ios            # Expo dev build on the iOS simulator (needs Xcode)
+pnpm --filter @ovlive/mobile run android        # … Android emulator (needs Android Studio + JDK 17)
+pnpm --filter @ovlive/mobile run start          # Metro only, for an already-installed dev build
+pnpm --filter @ovlive/mobile run doctor         # expo-doctor
 ```
 
 The SPA points at `VITE_API_BASE`, defaulting to `http://127.0.0.1:8080` (`apps/web/app/lib/config.ts`).
 No dev proxy is involved — the server sends permissive CORS and the WS connects cross-origin — so a
 backend on another host/port just needs `VITE_API_BASE=http://host:port pnpm --filter @ovlive/web run dev`.
+
+The mobile app (`apps/mobile`, Expo + expo-router + MapLibre Native) is not in Expo Go — it
+has native modules — so it needs a dev build from Xcode / Android Studio. A **physical phone
+cannot reach `127.0.0.1`**: in development `apps/mobile/lib/config.ts` takes the Mac's LAN
+address from Metro's `hostUri` and swaps the port to 8080, so the backend must listen on
+`0.0.0.0:8080` (`BIND_ADDR`) and the phone must be on the same Wi-Fi. `EXPO_PUBLIC_API_BASE`
+overrides that; release builds use `https://ovlive.nl`.
 
 `cargo test --workspace` and `just check` (clippy `-D warnings`) are both green, including the
 `crates/*/examples/` targets — keep them that way, since a stale example breaks the whole
@@ -384,19 +398,28 @@ Consequences, so this isn't rediscovered the hard way:
 
 - **`packages/proto/ovlive.proto` is the single source of truth for the WS wire format.** Rust
   types are generated at build time (`crates/proto/build.rs`, vendored protoc, no system install).
-  The TS side does **not** codegen: `packages/api-types/src/proto.ts` raw-imports the `.proto` and
-  parses it at runtime with protobufjs using `keepCase: true`, so **wire objects keep snake_case
-  field names**. The `just proto-ts` target is stale — `@ovlive/api-types` has no `generate` script.
-  The hand-written TS interfaces in `packages/api-types/src/types.ts` / `ws.ts` must be updated by
-  hand when the proto changes.
+  The TS codec is a **committed protobufjs static module**, `packages/api-types/src/gen/`,
+  regenerated with `pnpm --filter @ovlive/api-types run generate` (`just proto-ts`); CI fails
+  if it drifts from the `.proto`. It is static rather than runtime reflection because the
+  clients include React Native: Metro has no equivalent of Vite's `?raw` import, and
+  protobufjs's reflection path builds codecs with `Function()`. `--keep-case` means **wire
+  objects keep snake_case field names**. The hand-written TS interfaces in
+  `packages/api-types/src/types.ts` / `ws.ts` must still be updated by hand when the proto
+  changes. `rest.ts` deliberately avoids `URLSearchParams` (React Native's shim lacks `.set()`).
 - **REST is JSON and is documented by a hand-written `crates/api/openapi.json`**, embedded with
   `include_str!` and served at `/openapi.json` + `/docs` (Scalar). Adding or changing a route means
   editing that file too — nothing validates it against the router.
-- **A backend contract change is not "done" until the frontend uses it.** `apps/web` is a working
-  React Router 7 SPA (SSR off) with MapLibre: `MapView`, `VehiclePanel` (tabs, follow, isolate,
-  upcoming stops), `FiltersPanel`, NL/EN i18n in `app/lib/i18n.tsx`. It talks
-  to the backend only through `@ovlive/api-types` (`LiveClient` WS + `RestClient`), aliased to
-  source by `apps/web/vite.config.ts`. Check `apps/web` before claiming a feature is user-visible.
+- **A backend contract change is not "done" until both clients use it.** `apps/web` is a
+  React Router 7 SPA (SSR off) with MapLibre GL: `MapView`, `VehiclePanel` (tabs, follow,
+  isolate, upcoming stops), `FiltersPanel`. `apps/mobile` is the Expo app with the same flow on
+  MapLibre Native: `components/map/LiveMap.tsx` mirrors `MapView.tsx` layer for layer,
+  `hooks/useMapApp.ts` mirrors `routes/home.tsx`. Both talk to the backend only through
+  `@ovlive/api-types` (`LiveClient` WS + `RestClient`) and share their pure logic through
+  **`@ovlive/shared`** (`packages/shared`: `format`, `trip`, the i18n dictionaries,
+  `vehicleView()`, the marker/trip-stop palettes and the VersaTiles style URLs). That package is
+  React-free and DOM-free on purpose — its `tsconfig` has no DOM `lib` beyond what `api-types`
+  needs — so anything that belongs to one renderer stays in its app. Check both apps before
+  claiming a feature is user-visible; add a field to `vehicleView()` and both get it.
 - **The vehicle detail is split into a polled half and a static half**, because only one of them
   changes. `GET /v1/vehicles/{id}` (polled every 8 s) carries the vehicle and the
   matched `trip_id`; `GET /v1/vehicles/{id}/trip` carries the route shape and **every** scheduled
@@ -497,8 +520,22 @@ Consequences, so this isn't rediscovered the hard way:
   `.follow-row` reclaim the close button's right padding: the header is the fixed cost of every
   snap, and at 375px those two changes took it from 202 px to 113 px — over a third of the old
   half-screen sheet was chrome.
-- `apps/mobile` (Expo, Phase 3) does not exist yet. `migrations/0001` reserves a `trip_history`
-  table for Phase 4 that nothing writes to.
+- **`apps/mobile` is the Expo app** (expo-router, `@maplibre/maplibre-react-native`,
+  `@gorhom/bottom-sheet`, `react-native-mmkv`). MapLibre on both platforms — not Apple/Google
+  Maps — because Google Maps on Android needs a billed Google Cloud key and a split stack would
+  double the map work; the upside is that the web's layer specs, GeoJSON and palettes port
+  verbatim. Vehicle pills are **baked bitmaps** (`lib/markerImages.ts`, Skia off-screen, the
+  web's `makeMarker` geometry, 2× and drawn at `icon-size` 0.5), keyed `m|owner|line|tone[|sel]`
+  and fed to MapLibre's `<Images>` lazily (`hooks/useMarkerImages.ts`). Not a text layer: a
+  symbol layer draws all its icons and then all its text, so labels of overlapping markers bled
+  across each other's pills — baked, overlapping markers stack as whole units like the web.
+  Light/dark is a setting (`ovlive_appearance`: system/light/dark, `lib/settings.tsx`),
+  resolved in `theme/tokens.ts`: colorful ↔ eclipse basemap, `markerPalette(dark)` overlays. Preferences use the web's `localStorage` key names in MMKV. Native
+  `ios/`/`android/` directories are generated (`expo prebuild`) and gitignored. Bundle id
+  `nl.ovlive.app`; universal links claim `ovlive.nl`, which needs the web's nginx to serve
+  `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` (not done yet).
+  Share links are web URLs so recipients without the app still land on the map.
+  `migrations/0001` reserves a `trip_history` table for Phase 4 that nothing writes to.
 - Comments explain *why* (feed quirks, policy, CPU trade-offs), not *what*. Match that: the
   non-obvious constraints in this codebase are almost all upstream-data facts that were measured
   live, so record the measurement alongside the code.

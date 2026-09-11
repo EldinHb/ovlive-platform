@@ -10,5 +10,13 @@
   },
   "dependencies": {
     "protobufjs": "^7.4.0"
+  },
+  "scripts": {
+    "generate": "pbjs -t static-module -w es6 --keep-case --no-delimited --no-service --no-create -o src/gen/ovlive.js ../proto/ovlive.proto && node scripts/postgen.mjs && pbts -o src/gen/ovlive.d.ts src/gen/ovlive.js",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "protobufjs-cli": "^1.2.0",
+    "typescript": "^5.6.3"
   }
 }

@@ -1,0 +1,31 @@
+# TypeScript side of the workspace: the shared client packages, the web SPA and (from Phase 2
+# on) the mobile app. docker.yml only builds images, so without this a type error in
+# packages/* or apps/* would first surface as a failed image build — or, for mobile, never.
+name: js
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # Reads the pnpm version from the root package.json `packageManager` field.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The protobuf codec in packages/api-types/src/gen is committed, generated from
+      # packages/proto/ovlive.proto. A PR that edits the .proto without regenerating fails here.
+      - name: Check protobuf codegen is up to date
+        run: |
+          pnpm --filter @ovlive/api-types run generate
+          git diff --exit-code -- packages/api-types/src/gen
+      - run: pnpm -r run typecheck

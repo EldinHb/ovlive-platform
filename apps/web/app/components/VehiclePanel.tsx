@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { Vehicle, VehicleDetail, VehicleTripPlan } from "@ovlive/api-types";
 import { useNow } from "../lib/clock";
-import { resolveOperator } from "../lib/format";
+import { resolveOperator } from "@ovlive/shared";
 import { useI18n } from "../lib/i18n";
 import {
   IconExternal,

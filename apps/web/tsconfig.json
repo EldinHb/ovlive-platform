@@ -16,7 +16,8 @@
     "rootDirs": [".", "./.react-router/types"],
     "baseUrl": ".",
     "paths": {
-      "@ovlive/api-types": ["../../packages/api-types/src/index.ts"]
+      "@ovlive/api-types": ["../../packages/api-types/src/index.ts"],
+      "@ovlive/shared": ["../../packages/shared/src/index.ts"]
     }
   }
 }

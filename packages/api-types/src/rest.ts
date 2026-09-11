@@ -20,20 +20,68 @@ export interface LineInfo {
   vehicles: number;
 }
 
+/** A non-2xx response. `status` lets callers back off on 429/503 instead of retrying blindly. */
+export class RestError extends Error {
+  constructor(public readonly status: number, path: string) {
+    super(`${path} -> ${status}`);
+    this.name = "RestError";
+  }
+}
+
+export interface RestOptions {
+  apiKey?: string;
+  /** Per-request deadline; default 10 s. Mobile networks can hang a fetch indefinitely. */
+  timeoutMs?: number;
+}
+
+/**
+ * Query string builder on `encodeURIComponent`, not `URLSearchParams`: React Native's shim
+ * of the latter implements only `append`/`toString`, so `.set()` throws at runtime there.
+ * Undefined and empty values are skipped; the result is "" or "?a=b&c=d".
+ */
+function query(params: Record<string, string | number | undefined>): string {
+  const parts: string[] = [];
+  for (const k in params) {
+    const v = params[k];
+    if (v === undefined || v === "") continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  }
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
 export class RestClient {
+  private apiKey?: string;
+  private timeoutMs: number;
+
   /**
-   * `apiKey` is optional. The official web app calls the public data endpoints without
-   * one; a key is only needed by third-party API consumers (for higher, per-key limits).
+   * `apiKey` is optional. The official clients call the public data endpoints without one;
+   * a key is only needed by third-party API consumers (for higher, per-key limits).
    */
-  constructor(private baseUrl: string, private apiKey?: string) {}
+  constructor(private baseUrl: string, opts?: string | RestOptions) {
+    const o = typeof opts === "string" ? { apiKey: opts } : opts ?? {};
+    this.apiKey = o.apiKey;
+    this.timeoutMs = o.timeoutMs ?? 10_000;
+  }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {},
-      signal,
-    });
-    if (!res.ok) throw new Error(`${path} -> ${res.status}`);
-    return res.json() as Promise<T>;
+    // One controller merges the caller's signal with the deadline. Done by hand rather than
+    // with AbortSignal.any / AbortSignal.timeout, which Hermes lacks.
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    if (signal?.aborted) ac.abort();
+    else signal?.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => ac.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {},
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new RestError(res.status, path);
+      return (await res.json()) as T;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   /**
@@ -57,21 +105,23 @@ export class RestClient {
    * response says how many there were.
    */
   searchVehicles(
-    query: string,
+    search: string,
     opts: { types?: VehicleType[]; owners?: string[]; limit?: number } = {},
     signal?: AbortSignal,
   ): Promise<VehiclesResponse> {
-    const q = new URLSearchParams({ search: query });
-    if (opts.types?.length) q.set("types", opts.types.map((t) => VEHICLE_TYPE_LABEL[t]).join(","));
-    if (opts.owners?.length) q.set("owners", opts.owners.join(","));
-    if (opts.limit) q.set("limit", String(opts.limit));
-    return this.get(`/v1/vehicles?${q}`, signal);
+    const qs = query({
+      search,
+      types: opts.types?.length ? opts.types.map((t) => VEHICLE_TYPE_LABEL[t]).join(",") : undefined,
+      owners: opts.owners?.length ? opts.owners.join(",") : undefined,
+      limit: opts.limit,
+    });
+    return this.get(`/v1/vehicles${qs}`, signal);
   }
-  operators(): Promise<{ operators: OperatorInfo[] }> {
-    return this.get(`/v1/operators`);
+  operators(signal?: AbortSignal): Promise<{ operators: OperatorInfo[] }> {
+    return this.get(`/v1/operators`, signal);
   }
-  lines(): Promise<{ lines: LineInfo[] }> {
-    return this.get(`/v1/lines`);
+  lines(signal?: AbortSignal): Promise<{ lines: LineInfo[] }> {
+    return this.get(`/v1/lines`, signal);
   }
   /**
    * Stops inside a viewport, for the map's stop layer. The server rejects boxes larger than
@@ -79,9 +129,8 @@ export class RestClient {
    * zoomed in — and tolerate an empty layer right after a server restart.
    */
   stopsInViewport(b: BBox, limit?: number, signal?: AbortSignal): Promise<StopsResponse> {
-    const q = new URLSearchParams({ bbox: `${b.minLon},${b.minLat},${b.maxLon},${b.maxLat}` });
-    if (limit) q.set("limit", String(limit));
-    return this.get(`/v1/stops/viewport?${q}`, signal);
+    const qs = query({ bbox: `${b.minLon},${b.minLat},${b.maxLon},${b.maxLat}`, limit });
+    return this.get(`/v1/stops/viewport${qs}`, signal);
   }
   /** Departure board for one quay. `window` is minutes ahead (server default 90). */
   stopDepartures(
@@ -89,10 +138,7 @@ export class RestClient {
     opts: { window?: number; limit?: number } = {},
     signal?: AbortSignal,
   ): Promise<StopDeparturesResponse> {
-    const q = new URLSearchParams();
-    if (opts.window) q.set("window", String(opts.window));
-    if (opts.limit) q.set("limit", String(opts.limit));
-    const qs = q.toString();
-    return this.get(`/v1/stops/${encodeURIComponent(stopId)}/departures${qs ? `?${qs}` : ""}`, signal);
+    const qs = query({ window: opts.window, limit: opts.limit });
+    return this.get(`/v1/stops/${encodeURIComponent(stopId)}/departures${qs}`, signal);
   }
 }
