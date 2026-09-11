@@ -1,6 +1,6 @@
 import type { StopDeparture, StopDeparturesResponse } from "@ovlive/api-types";
 import { etaLabel, useNow } from "../lib/clock";
-import { etaSeconds, formatDelay, resolveOperator, secsToClock, typeKeyOf } from "../lib/format";
+import { etaSeconds, formatDelay, resolveOperator, secsToClock, typeKeyOf } from "@ovlive/shared";
 import { useI18n } from "../lib/i18n";
 import { Sheet } from "./Sheet";
 

@@ -9,7 +9,18 @@ export type ConnStatus = "connecting" | "open" | "closed";
 interface Handlers {
   onUpdate: (u: NormalizedUpdate) => void;
   onStatus?: (s: ConnStatus) => void;
+  /**
+   * Liveness watchdog, off by default. A quiet tick sends no frame at all, so silence is a
+   * normal steady state and a half-open socket (a phone hopping from Wi-Fi to cellular) is
+   * otherwise undetectable: after `heartbeatMs` without a frame the client pings, and closes
+   * — triggering the normal reconnect — if nothing comes back within HEARTBEAT_GRACE_MS.
+   * Browsers don't need it; the mobile app turns it on.
+   */
+  heartbeatMs?: number;
 }
+
+const HEARTBEAT_GRACE_MS = 10_000;
+const RETRY_MAX_MS = 30_000;
 
 function toVehicle(s: any): Vehicle {
   return {
@@ -67,6 +78,8 @@ export class LiveClient {
   private pinned: string[] = [];
   private closedByUser = false;
   private retry = 500;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
 
   /**
    * `apiKey` is optional — the official web app streams without one. A key is only for
@@ -93,6 +106,7 @@ export class LiveClient {
 
     ws.onopen = () => {
       this.retry = 500;
+      this.armHeartbeat();
       this.handlers.onStatus?.("open");
       if (this.view) {
         ws.send(
@@ -103,7 +117,9 @@ export class LiveClient {
       }
     };
     ws.onmessage = (ev) => {
+      this.armHeartbeat();
       const obj = decodeServer(new Uint8Array(ev.data as ArrayBuffer));
+      // Pongs and server errors only count as liveness; there is nothing to render.
       if (obj.update) {
         const u = obj.update;
         this.handlers.onUpdate({
@@ -115,13 +131,34 @@ export class LiveClient {
       }
     };
     ws.onclose = () => {
+      this.clearHeartbeat();
+      // A stale socket's close must not reconnect: after suspend() the current socket is gone,
+      // and after resume() a late close from the old one would open a second connection.
+      if (this.ws !== ws) return;
       this.handlers.onStatus?.("closed");
       if (!this.closedByUser) {
-        setTimeout(() => this.open(), this.retry);
-        this.retry = Math.min(this.retry * 2, 10_000);
+        this.retryTimer = setTimeout(() => this.open(), this.retry);
+        this.retry = Math.min(this.retry * 2, RETRY_MAX_MS);
       }
     };
     ws.onerror = () => ws.close();
+  }
+
+  private armHeartbeat() {
+    this.clearHeartbeat();
+    const idle = this.handlers.heartbeatMs;
+    if (!idle) return;
+    this.heartbeatTimer = setTimeout(() => {
+      const ws = this.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(encodeClient({ ping: true }));
+      this.heartbeatTimer = setTimeout(() => ws.close(), HEARTBEAT_GRACE_MS);
+    }, idle);
+  }
+
+  private clearHeartbeat() {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
   }
 
   /** Update the viewport/filters (called on map move / filter change). */
@@ -149,8 +186,35 @@ export class LiveClient {
     }
   }
 
-  close() {
+  /**
+   * Drop the connection without reconnecting, keeping the subscription (viewport, filters,
+   * pinned) for `resume()`. For an app going to the background: a socket held open there is
+   * either killed by the OS or streams to nobody.
+   */
+  suspend() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.clearHeartbeat();
     this.closedByUser = true;
-    this.ws?.close();
+    const ws = this.ws;
+    this.ws = undefined;
+    ws?.close();
+    this.handlers.onStatus?.("closed");
+  }
+
+  /**
+   * Reopen after `suspend()` (or a `close()`). Re-subscribes with the stored view; the server
+   * answers every Subscribe with a full snapshot, so callers rebuild their state from the
+   * `isSnapshot` frame rather than patching what they had before the pause.
+   */
+  resume() {
+    if (this.ws || !this.view) return;
+    this.closedByUser = false;
+    this.retry = 500;
+    this.open();
+  }
+
+  close() {
+    this.suspend();
   }
 }

@@ -19,8 +19,8 @@ import {
   type MapTheme,
   type MarkerPalette,
 } from "../lib/styles";
-import { resolveOperator } from "../lib/format";
-import { tripStopFeatures, upcomingFromIndex } from "../lib/trip";
+import { resolveOperator } from "@ovlive/shared";
+import { tripStopFeatures, upcomingFromIndex } from "@ovlive/shared";
 import { API_BASE, DEFAULT_ZOOM, NL_CENTER, getSavedView, setSavedView } from "../lib/config";
 
 export interface MapHandle {
@@ -111,18 +111,18 @@ function covers(have: BBox | null, view: BBox): boolean {
 
 export const MapView = forwardRef<MapHandle, Props>(function MapView(props, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map>();
-  const clientRef = useRef<LiveClient>();
+  const mapRef = useRef<maplibregl.Map | undefined>(undefined);
+  const clientRef = useRef<LiveClient | undefined>(undefined);
   const featuresRef = useRef<Map<string, GeoJSON.Feature>>(new Map());
   const vehiclesRef = useRef<Map<string, Vehicle>>(new Map());
   const dirtyRef = useRef(false);
-  const rafRef = useRef<number>();
-  const meMarkerRef = useRef<maplibregl.Marker>();
+  const rafRef = useRef<number | undefined>(undefined);
+  const meMarkerRef = useRef<maplibregl.Marker | undefined>(undefined);
   const hoveredRef = useRef<string | null>(null);
   // Stop layer: the last fetched features, the box they cover, and the in-flight request.
   const stopsRef = useRef<GeoJSON.FeatureCollection>(emptyFC());
   const stopsBoxRef = useRef<BBox | null>(null);
-  const stopsAbortRef = useRef<AbortController>();
+  const stopsAbortRef = useRef<AbortController | undefined>(undefined);
   const rest = useMemo(() => new RestClient(API_BASE), []);
   // Always-current copies for use inside stable map event handlers.
   const filtersRef = useRef(props.filters);

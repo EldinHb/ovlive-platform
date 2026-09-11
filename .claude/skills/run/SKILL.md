@@ -104,6 +104,29 @@ The SPA reaches the backend directly at `VITE_API_BASE`, default `http://127.0.0
 cross-origin. A backend elsewhere just needs
 `VITE_API_BASE=http://host:port pnpm --filter @ovlive/web run dev`.
 
+## 3b. Mobile app (apps/mobile)
+
+Not in Expo Go (native modules). Needs Xcode or Android Studio for a dev build, once:
+
+```bash
+pnpm --filter @ovlive/mobile run ios       # or: run android
+pnpm --filter @ovlive/mobile run start     # Metro only, once a dev build is installed
+```
+
+Toolchain gotchas (JDK 17 not the Studio JBR, `DEVELOPER_DIR`, xcodebuild for the simulator,
+forcing an Android reload) are in `apps/mobile/README.md`. **Rebuild the server first**
+(`cargo build --release -p ovlive-server`): the checked-out `target/` binaries can be months
+older than the source, and a stale one silently lacks features the clients rely on — pinned
+vehicles were missing from one, which made every vehicle look "ended" on the detail screen.
+
+The backend from §2 already binds `0.0.0.0:8080`, which is what a **physical phone** needs: it
+cannot reach `127.0.0.1`, so `apps/mobile/lib/config.ts` derives the API base from Metro's host
+(the Mac's LAN IP) with the port swapped to 8080. Same Wi-Fi required. Override with
+`EXPO_PUBLIC_API_BASE=http://<host>:8080`. Deep-link a vehicle on a simulator with
+`npx uri-scheme open "ovlive:///?v=IFF%3A8743" --ios`. `pnpm exec expo export --platform android`
+(inside `apps/mobile`) bundles without any native toolchain — the cheap check that Metro still
+resolves the workspace packages.
+
 ## 4. Drive it
 
 Health is **`/health`**, not `/healthz` (`/healthz` 404s):

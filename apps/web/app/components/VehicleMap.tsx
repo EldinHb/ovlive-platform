@@ -18,7 +18,7 @@ import {
   withGlyphs,
   type MapTheme,
 } from "../lib/styles";
-import { tripStopFeatures } from "../lib/trip";
+import { tripStopFeatures } from "@ovlive/shared";
 
 /** Close enough to read the street the vehicle is on, wide enough to see the next stops. */
 const DETAIL_ZOOM = 14;
@@ -64,9 +64,9 @@ export function VehicleMap({
   onDetach,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map>();
-  const markerRef = useRef<maplibregl.Marker>();
-  const markerElRef = useRef<HTMLDivElement>();
+  const mapRef = useRef<maplibregl.Map | undefined>(undefined);
+  const markerRef = useRef<maplibregl.Marker | undefined>(undefined);
+  const markerElRef = useRef<HTMLDivElement | undefined>(undefined);
   /** Has the camera been put on the vehicle at least once? The first fix jumps, the rest ease. */
   const centeredRef = useRef(false);
   // Always-current copies, for the map event handlers and the style.load closure.

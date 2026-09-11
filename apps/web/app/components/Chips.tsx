@@ -74,7 +74,7 @@ export const IconBack = (
 /** A chip that copies `url` to the clipboard, briefly confirming "Copied". */
 export function ShareButton({ url, t }: { url: () => string; t: TFn }) {
   const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   async function copy() {
     const text = url();
     try {

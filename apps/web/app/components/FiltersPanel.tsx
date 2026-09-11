@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { VehicleType, type FilterState, type VehicleSummary } from "@ovlive/api-types";
-import { resolveOperator, typeKeyOf } from "../lib/format";
+import { resolveOperator, typeKeyOf } from "@ovlive/shared";
 import { useI18n } from "../lib/i18n";
 
 const TYPES: { t: VehicleType; key: string }[] = [

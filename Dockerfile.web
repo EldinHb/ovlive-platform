@@ -12,10 +12,11 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/web/package.json apps/web/
 COPY packages/api-types/package.json packages/api-types/
+COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
 
-# Sources. packages/ is needed whole, not just api-types: proto.ts raw-imports
-# packages/proto/ovlive.proto and parses it at runtime, so the .proto is part of the bundle.
+# Sources. packages/ is copied whole: api-types, shared, and packages/proto (the source the
+# committed protobuf codegen in api-types/src/gen is checked against).
 COPY apps/web apps/web
 COPY packages packages
 
